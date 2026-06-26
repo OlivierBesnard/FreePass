@@ -1,0 +1,138 @@
+import { useState } from "react";
+import { Copy, Eye, EyeOff, Pencil, Trash2, ExternalLink } from "lucide-react";
+import { toast } from "sonner";
+import type { EntryDetail as Entry } from "../lib/api";
+import { useArchiveEntry, useEntry } from "../hooks/useVault";
+import { Modal } from "./Modal";
+
+async function copy(value: string, label: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+    toast.success(`${label} copié.`);
+  } catch {
+    toast.error("Impossible de copier.");
+  }
+}
+
+/** Read view for one entry: reveal/copy fields, edit, or archive. */
+export function EntryDetailView({
+  envId,
+  entryId,
+  onClose,
+  onEdit,
+}: {
+  envId: string;
+  entryId: string;
+  onClose: () => void;
+  onEdit: (entry: Entry) => void;
+}) {
+  const { data: entry, isLoading } = useEntry(envId, entryId);
+  const archive = useArchiveEntry(envId);
+  const [reveal, setReveal] = useState(false);
+
+  return (
+    <Modal title={entry?.title ?? "Identifiant"} onClose={onClose}>
+      {isLoading || !entry ? (
+        <p className="text-sm text-ink-500">Déchiffrement…</p>
+      ) : (
+        <div className="space-y-4">
+          {entry.url && (
+            <Row label="Site web">
+              <a
+                href={entry.url.startsWith("http") ? entry.url : `https://${entry.url}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-brand-700 hover:underline"
+              >
+                {entry.url}
+                <ExternalLink size={13} />
+              </a>
+            </Row>
+          )}
+          {entry.username && (
+            <Row label="Identifiant" onCopy={() => copy(entry.username!, "Identifiant")}>
+              <span className="text-ink-800">{entry.username}</span>
+            </Row>
+          )}
+          {entry.password && (
+            <Row
+              label="Mot de passe"
+              onCopy={() => copy(entry.password!, "Mot de passe")}
+              extra={
+                <button
+                  onClick={() => setReveal((v) => !v)}
+                  className="rounded p-1 text-ink-400 hover:bg-cream-300 hover:text-ink-700"
+                  aria-label={reveal ? "Masquer" : "Afficher"}
+                >
+                  {reveal ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              }
+            >
+              <span className="font-mono text-ink-800">
+                {reveal ? entry.password : "••••••••••••"}
+              </span>
+            </Row>
+          )}
+          {entry.notes && (
+            <Row label="Notes">
+              <p className="whitespace-pre-wrap text-ink-700">{entry.notes}</p>
+            </Row>
+          )}
+
+          <div className="flex justify-end gap-2 border-t border-cream-400 pt-4">
+            <button
+              onClick={() => {
+                archive.mutate(entry.id);
+                onClose();
+              }}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-danger-600 transition-colors hover:bg-danger-50"
+            >
+              <Trash2 size={15} /> Archiver
+            </button>
+            <button
+              onClick={() => onEdit(entry)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand-500 px-3 text-sm font-medium text-white transition-colors hover:bg-brand-600"
+            >
+              <Pencil size={15} /> Modifier
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function Row({
+  label,
+  children,
+  onCopy,
+  extra,
+}: {
+  label: string;
+  children: React.ReactNode;
+  onCopy?: () => void;
+  extra?: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="mb-0.5 flex items-center justify-between">
+        <span className="text-xs font-medium uppercase tracking-wide text-ink-400">
+          {label}
+        </span>
+        <div className="flex items-center gap-0.5">
+          {extra}
+          {onCopy && (
+            <button
+              onClick={onCopy}
+              className="rounded p-1 text-ink-400 hover:bg-cream-300 hover:text-ink-700"
+              aria-label="Copier"
+            >
+              <Copy size={15} />
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="text-sm">{children}</div>
+    </div>
+  );
+}

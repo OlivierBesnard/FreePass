@@ -1,0 +1,400 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Design tokens (Tailwind 4 @theme)
+   Studio palette — warm terracotta + cream + serif Fraunces
+   ============================================================ */
+@theme {
+  /* === Fonts === */
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-serif:
+    "Fraunces", "Iowan Old Style", "Apple Garamond", Baskerville,
+    "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* === Ink palette (warm brown — body text, borders, surfaces).
+     Repaletised from slate. Class names like `text-ink-500`,
+     `bg-ink-100` keep working everywhere — they just go warm. */
+  --color-ink-50: #fffbf6;
+  --color-ink-100: #faf5ef;
+  --color-ink-200: #f4ecdf;
+  --color-ink-300: #ebe0cd;
+  --color-ink-400: #b8a886;
+  --color-ink-500: #847465;
+  --color-ink-600: #5b4839;
+  --color-ink-700: #3a2c20;
+  --color-ink-800: #2a1f17;
+  --color-ink-900: #1a120c;
+  --color-ink-950: #0d0904;
+
+  /* === Brand palette (terracotta). Repaletised from indigo. === */
+  --color-brand-50: #fdf6f3;
+  --color-brand-100: #f8e6df;
+  --color-brand-200: #f3d2c5;
+  --color-brand-300: #ebb9a5;
+  --color-brand-400: #dd9684;
+  --color-brand-500: #c47b6b;
+  --color-brand-600: #ad6453;
+  --color-brand-700: #9b5a4a;
+  --color-brand-800: #804538;
+  --color-brand-900: #6a3a2f;
+  --color-brand-950: #3d1f17;
+
+  /* === Cream palette (explicit warm whites for surfaces) === */
+  --color-cream-50: #fffdf9;
+  --color-cream-100: #fffbf6;
+  --color-cream-200: #faf5ef;
+  --color-cream-300: #f4ecdf;
+  --color-cream-400: #ebe0cd;
+  --color-cream-500: #d4c5aa;
+
+  /* === Semantic palette (warm-tuned) ===
+     Use these instead of rose/amber/green where the warm tone matters. */
+
+  /* Success — sage green */
+  --color-success-50: #f3f7ee;
+  --color-success-100: #e3ecd2;
+  --color-success-200: #c8d9a8;
+  --color-success-500: #5d7e3a;
+  --color-success-600: #4d6a30;
+  --color-success-700: #3f5a23;
+
+  /* Warning — mustard ocre */
+  --color-warning-50: #fdf7e3;
+  --color-warning-100: #faecd0;
+  --color-warning-200: #f0d68a;
+  --color-warning-500: #a06a1f;
+  --color-warning-600: #855915;
+  --color-warning-700: #6f4a14;
+
+  /* Danger — terre cuite */
+  --color-danger-50: #fdf0ec;
+  --color-danger-100: #fbe5dd;
+  --color-danger-200: #f0bbab;
+  --color-danger-500: #b45341;
+  --color-danger-600: #983f30;
+  --color-danger-700: #82382c;
+
+  /* Gold — decorative accent (logo, positive metrics highlights) */
+  --color-gold-100: #f9eccd;
+  --color-gold-300: #d9b56a;
+  --color-gold-500: #b8923f;
+  --color-gold-600: #9a7a32;
+  --color-gold-700: #7a5e23;
+
+  /* === Decorative shadows — warm === */
+  --shadow-soft:
+    0 1px 2px 0 rgb(60 40 15 / 0.04), 0 1px 3px 0 rgb(60 40 15 / 0.06);
+  --shadow-card:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 1px 2px 0 rgb(60 40 15 / 0.04),
+    0 8px 24px -12px rgb(196 123 107 / 0.08);
+  --shadow-pop:
+    0 8px 24px -8px rgb(196 123 107 / 0.20),
+    0 2px 4px -1px rgb(60 40 15 / 0.06);
+  --shadow-glow: 0 0 0 4px rgb(196 123 107 / 0.15);
+  --shadow-hero:
+    0 1px 0 rgba(255, 255, 255, 0.7) inset,
+    0 12px 32px -12px rgb(196 123 107 / 0.20);
+}
+
+/* ============================================================
+   Legacy semantic tokens — repaletised warm.
+   Light-mode only; dark mode was removed during the redesign.
+   ============================================================ */
+:root {
+  --background: #faf5ef; /* cream-200 */
+  --foreground: #2a1f17; /* ink-800 */
+  --card: #fffbf6; /* cream-100 */
+  --card-foreground: #2a1f17; /* ink-800 */
+  --muted: #f4ecdf; /* cream-300 */
+  --muted-foreground: #847465; /* ink-500 */
+  --border: #ebe0cd; /* cream-400 */
+  --input: #ebe0cd; /* cream-400 */
+  --ring: #c47b6b; /* brand-500 */
+  --primary: #c47b6b; /* brand-500 */
+  --primary-foreground: #fffbf6; /* cream-100 */
+  --accent: #f8e6df; /* brand-100 */
+  --accent-foreground: #9b5a4a; /* brand-700 */
+  --sidebar: #fffbf6; /* cream-100 */
+  --sidebar-foreground: #2a1f17; /* ink-800 */
+  --sidebar-border: #ebe0cd; /* cream-400 */
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-feature-settings:
+    "rlig" 1,
+    "calt" 1,
+    "cv11" 1,
+    "ss01" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  border-color: var(--border);
+}
+
+/* ============================================================
+   Custom utility classes — repaletised warm.
+   These are referenced as plain classes throughout the app
+   (e.g. `bg-mesh`, `nav-active`, `kbd`, `status-dot`).
+   ============================================================ */
+
+/* Background ambiance — was a violet/purple radial mesh,
+   now a calm cream with very subtle warm radial accents. */
+.bg-mesh {
+  background-color: var(--background);
+  background-image:
+    radial-gradient(at 0% 0%, rgba(196, 123, 107, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(184, 146, 63, 0.04) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(196, 123, 107, 0.03) 0px, transparent 50%);
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--color-cream-500);
+  border-radius: 999px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pill-shadow {
+  box-shadow: inset 0 0 0 1px rgba(60, 40, 15, 0.06);
+}
+
+/* Gradient text — was indigo/purple/pink, now warm terracotta→gold.
+   Kept for decorative highlights; logo uses the SVG compass instead. */
+.gradient-text {
+  background: linear-gradient(135deg, #c47b6b 0%, #9b5a4a 50%, #b8923f 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.gradient-border-card {
+  position: relative;
+  background: var(--card);
+}
+.gradient-border-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    135deg,
+    rgba(196, 123, 107, 0.4),
+    rgba(184, 146, 63, 0.2),
+    rgba(196, 123, 107, 0.3)
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.anim-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ring-focus:focus-within {
+  box-shadow: 0 0 0 4px rgb(196 123 107 / 0.15);
+  border-color: var(--ring);
+}
+
+/* Row hover — was an indigo/purple gradient, now a flat warm cream. */
+.row-hover:hover {
+  background: var(--color-cream-300);
+}
+
+/* Nav active — was a violet gradient pill, now a flat brand surface
+   in line with the Studio mockup (no shadow, no gradient). */
+.nav-active {
+  background: var(--color-brand-100);
+  color: var(--color-brand-700);
+  font-weight: 500;
+}
+.nav-link:hover:not(.nav-active) {
+  background: var(--color-cream-300);
+  color: var(--color-ink-700);
+}
+
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-cream-300);
+  border: 1px solid var(--color-cream-400);
+  color: var(--color-ink-600);
+  box-shadow: 0 1px 0 var(--color-cream-400);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.3;
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+
+/* Modern checkbox — was an indigo/purple gradient, now solid terracotta. */
+.checkbox-modern {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--color-cream-500);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+  background: var(--card);
+}
+.checkbox-modern:checked {
+  background: var(--color-brand-500);
+  border-color: var(--color-brand-500);
+}
+.checkbox-modern:checked::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--card);
+  border: 1px solid var(--color-cream-400);
+  color: var(--color-ink-600);
+  transition: all 0.15s;
+  cursor: pointer;
+}
+.filter-chip:hover {
+  border-color: var(--color-brand-300);
+  color: var(--color-brand-700);
+}
+.filter-chip.active {
+  background: var(--color-brand-100);
+  border-color: var(--color-brand-300);
+  color: var(--color-brand-700);
+}
+.filter-chip.active .count {
+  background: var(--color-brand-500);
+  color: white;
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--color-cream-400);
+  color: var(--color-ink-600);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.skel-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-cream-200) 0%,
+    var(--color-cream-300) 50%,
+    var(--color-cream-200) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Avatar gradient — was indigo→purple, now terracotta→gold by default.
+   Override per-avatar via inline `--g1` / `--g2` for variety. */
+.avatar-gradient {
+  background: linear-gradient(135deg, var(--g1, #c47b6b), var(--g2, #b8923f));
+}
