@@ -40,7 +40,7 @@
       "endpoints": [
         "https://github.com/OlivierBesnard/FreePass/releases/latest/download/latest.json"
       ],
-      "pubkey": "REMPLACER_PAR_LA_CLE_PUBLIQUE_TAURI_SIGNER",
+      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklFTTRRVEUwUmtZd05Ua3lSRFl6TVRJS1VsZFJVMWw1TVZvNFJTdG9lVTVRY1dSUU5VZEZUWGxRZUd0WVZGcGxZME13YW1WWWFIcFBPVlY1ZEdWeU16Z3dWMUpFYjFkVmQyb0s=",
       "windows": {
         "installMode": "passive"
       }
