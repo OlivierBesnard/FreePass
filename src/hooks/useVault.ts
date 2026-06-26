@@ -63,6 +63,19 @@ export function useUpdateEntry(envId: string | undefined) {
   });
 }
 
+export function useImportEntries(envId: string | undefined) {
+  const invalidate = useEntryInvalidation();
+  return useMutation({
+    mutationFn: (entries: EntryInput[]) =>
+      api.importEntries(envId as string, entries),
+    onSuccess: (count) => {
+      void invalidate();
+      toast.success(`${count} identifiant${count > 1 ? "s" : ""} importé${count > 1 ? "s" : ""}.`);
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+}
+
 export function useArchiveEntry(envId: string | undefined) {
   const invalidate = useEntryInvalidation();
   return useMutation({

@@ -99,6 +99,16 @@ pub async fn update_entry(
 }
 
 #[tauri::command]
+pub async fn import_entries(
+    state: State<'_, AppState>,
+    env_id: String,
+    entries: Vec<EntryInput>,
+) -> AppResult<usize> {
+    let env_key = resolve_env_key(&state, &env_id).await?;
+    entries::import_entries(&state.pool, &env_key, &env_id, &entries).await
+}
+
+#[tauri::command]
 pub async fn archive_entry(
     state: State<'_, AppState>,
     env_id: String,

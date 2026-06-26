@@ -11,8 +11,8 @@ use tauri::Manager;
 use crate::commands::db::db_health_check;
 use crate::commands::generator::generate_password;
 use crate::commands::entries::{
-    archive_entry, create_entry, default_environment, delete_entry, get_entry, list_entries,
-    update_entry,
+    archive_entry, create_entry, default_environment, delete_entry, get_entry, import_entries,
+    list_entries, update_entry,
 };
 use crate::commands::vault::{
     change_master_password, create_vault, lock, unlock, vault_status,
@@ -56,6 +56,7 @@ pub fn run() {
             update_entry,
             archive_entry,
             delete_entry,
+            import_entries,
             generate_password,
         ])
         .run(tauri::generate_context!())

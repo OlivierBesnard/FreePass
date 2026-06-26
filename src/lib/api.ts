@@ -76,6 +76,9 @@ export const api = {
   deleteEntry: (envId: string, entryId: string): Promise<void> =>
     invoke("delete_entry", { envId, entryId }),
 
+  importEntries: (envId: string, entries: EntryInput[]): Promise<number> =>
+    invoke("import_entries", { envId, entries }),
+
   generatePassword: (opts: GeneratorOptions): Promise<string> =>
     invoke("generate_password", { ...opts }),
 };

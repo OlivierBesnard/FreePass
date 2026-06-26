@@ -270,6 +270,58 @@ pub async fn delete_entry(pool: &SqlitePool, env_id: &str, entry_id: &str) -> Ap
     Ok(())
 }
 
+/// Bulk-import login entries in a single transaction (CSV import, F13). Rows
+/// with an empty title are skipped. Returns the number of entries created.
+pub async fn import_entries(
+    pool: &SqlitePool,
+    env_key: &SecretKey,
+    env_id: &str,
+    inputs: &[EntryInput],
+) -> AppResult<usize> {
+    let now = Utc::now().to_rfc3339();
+    let mut created = 0usize;
+
+    let mut tx = pool.begin().await?;
+    for input in inputs {
+        if input.title.trim().is_empty() {
+            continue;
+        }
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO entries (id, env_id, type, title, url, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(env_id)
+        .bind(ENTRY_TYPE_LOGIN)
+        .bind(input.title.trim())
+        .bind(&input.url)
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+
+        for name in LOGIN_FIELDS {
+            if let Some(value) = field_value(input, name) {
+                let sealed = crypto::encrypt_field(env_key, env_id, &id, name, value.as_bytes())?;
+                sqlx::query(
+                    "INSERT INTO entry_fields (entry_id, field_name, nonce, ciphertext) \
+                     VALUES (?, ?, ?, ?)",
+                )
+                .bind(&id)
+                .bind(name)
+                .bind(&sealed.nonce[..])
+                .bind(&sealed.ciphertext)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        created += 1;
+    }
+    tx.commit().await?;
+    Ok(created)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,6 +444,25 @@ mod tests {
             .unwrap();
         let title: String = erow.get("title");
         assert_eq!(title, "MyBank", "title is clear metadata by design");
+    }
+
+    #[tokio::test]
+    async fn import_creates_entries_and_skips_titleless_rows() {
+        let (pool, env_key, env_id) = setup().await;
+        let rows = vec![
+            login("GitHub", Some("github.com"), "a", "x"),
+            EntryInput { title: "  ".into(), url: None, username: None, password: Some("p".into()), notes: None },
+            login("GitLab", Some("gitlab.com"), "b", "y"),
+        ];
+        let n = import_entries(&pool, &env_key, &env_id, &rows).await.unwrap();
+        assert_eq!(n, 2, "the empty-title row must be skipped");
+
+        let list = list_entries(&pool, &env_id, None).await.unwrap();
+        assert_eq!(list.len(), 2);
+        // Imported secrets decrypt correctly.
+        let gh = list.iter().find(|e| e.title == "GitHub").unwrap();
+        let got = get_entry(&pool, &env_key, &env_id, &gh.id).await.unwrap();
+        assert_eq!(got.password.as_deref(), Some("x"));
     }
 
     #[tokio::test]

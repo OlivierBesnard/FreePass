@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { KeyRound, LockKeyhole, Plus, Search } from "lucide-react";
+import { KeyRound, LockKeyhole, Plus, Search, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage, type EntryDetail } from "../lib/api";
 import { useEnvironment, useEntries } from "../hooks/useVault";
@@ -7,6 +7,7 @@ import { Button, inputClass } from "../components/ui";
 import { EntryForm } from "../components/EntryForm";
 import { EntryDetailView } from "../components/EntryDetail";
 import { CommandPalette } from "../components/CommandPalette";
+import { ImportCsv } from "../components/ImportCsv";
 
 /** The unlocked vault: list, search, Cmd+K, CRUD, and lock. */
 export function VaultHome({ onLock }: { onLock: () => void }) {
@@ -20,6 +21,7 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
   const [editing, setEditing] = useState<EntryDetail | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -73,6 +75,13 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
           <Button onClick={() => setCreating(true)} className="h-9 shrink-0">
             <Plus size={16} className="mr-1" /> Ajouter
           </Button>
+          <button
+            onClick={() => setImportOpen(true)}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-ink-600 transition-colors hover:bg-cream-300"
+            title="Importer un CSV"
+          >
+            <Upload size={15} /> Importer
+          </button>
           <button
             onClick={handleLock}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-ink-600 transition-colors hover:bg-cream-300"
@@ -141,6 +150,9 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
             setSelectedId(id);
           }}
         />
+      )}
+      {importOpen && envId && (
+        <ImportCsv envId={envId} onClose={() => setImportOpen(false)} />
       )}
     </main>
   );
