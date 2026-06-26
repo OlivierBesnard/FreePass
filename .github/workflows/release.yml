@@ -1,0 +1,49 @@
+name: Release
+
+# Pousser un tag de version (ex. v0.1.1) déclenche : build + signature + une
+# GitHub Release publique contenant l'installeur ET `latest.json`. Les apps
+# installées lisent ce `latest.json` et se mettent à jour seules (DESIGN §9,
+# THREAT F15). Aucun serveur : GitHub Releases héberge tout.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Windows d'abord (plateforme cible). Pour macOS/Linux : ajouter une
+    # `strategy.matrix` avec macos-latest / ubuntu-22.04 (+ deps système Linux).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build, sign and publish the release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "FreePass ${{ github.ref_name }}"
+          releaseBody: "Mise à jour automatique : ouvrez FreePass, la nouvelle version vous sera proposée."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

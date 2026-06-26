@@ -3,6 +3,42 @@
 Runbook de publication (PLAN Phase 9). ⚙️ = outillable/automatisable · 🧑 = action
 **humaine** (custody de clé, soumission store, revue externe — jamais automatisée).
 
+## Mises à jour automatiques (le mécanisme)
+
+Pas de serveur : **GitHub Releases** héberge tout, l'**updater Tauri** fait le reste.
+
+- **Côté toi** : pousser un **tag** `vX.Y.Z` → le workflow `.github/workflows/release.yml`
+  build + signe + crée une **Release publique** avec l'installeur et `latest.json`.
+- **Côté users** : au lancement, l'app lit `latest.json` (HTTP public, invisible),
+  et si une version plus récente existe, propose la MAJ **dans l'app** (bannière) →
+  télécharge + installe + relance. Jamais de visite GitHub. Signature ed25519
+  vérifiée (un faux update est refusé).
+
+### Publier une version (le geste courant)
+```powershell
+node scripts/bump-version.mjs 0.1.1   # met à jour package.json + tauri.conf + Cargo.toml
+git commit -am "release: v0.1.1"
+git tag v0.1.1
+git push --follow-tags                # déclenche le build + la Release
+```
+
+### 🧑 Une seule fois : la clé de signature
+```powershell
+pnpm tauri signer generate -w "$HOME/.freepass/updater.key"
+```
+1. Copier la **clé publique** dans `src-tauri/tauri.conf.json` →
+   `plugins.updater.pubkey` (remplace le placeholder).
+2. Ajouter dans **Settings → Secrets → Actions** du repo :
+   `TAURI_SIGNING_PRIVATE_KEY` (contenu du fichier) et
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+3. Garder la **clé privée hors dépôt**. Sans elle, plus aucune MAJ ne peut être
+   signée → conserver précieusement.
+
+> macOS/Linux : ajouter une `strategy.matrix` au workflow (le `latest.json` gère
+> plusieurs plateformes). Pour l'instant : Windows.
+
+---
+
 ## 0. Pré-requis
 - Rust stable, Node + pnpm, et le bundler de l'OS (Windows : WiX/NSIS via Tauri ;
   macOS : Xcode CLT ; Linux : `dpkg`/`appimagetool`).
