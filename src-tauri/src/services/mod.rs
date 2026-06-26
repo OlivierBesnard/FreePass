@@ -3,4 +3,5 @@
 
 pub mod entries;
 pub mod generator;
+pub mod local_channel;
 pub mod vault;

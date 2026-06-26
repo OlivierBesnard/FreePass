@@ -15,7 +15,7 @@ use crate::commands::entries::{
     list_entries, update_entry,
 };
 use crate::commands::vault::{
-    change_master_password, create_vault, lock, unlock, vault_status,
+    change_master_password, create_vault, local_channel_info, lock, unlock, vault_status,
 };
 use crate::db::init_pool;
 use crate::state::AppState;
@@ -49,6 +49,7 @@ pub fn run() {
             unlock,
             lock,
             change_master_password,
+            local_channel_info,
             default_environment,
             list_entries,
             get_entry,

@@ -11,6 +11,11 @@ export interface EnvironmentInfo {
   name: string;
 }
 
+export interface ChannelInfo {
+  port: number;
+  token: string;
+}
+
 export interface EntrySummary {
   id: string;
   env_id: string;
@@ -57,6 +62,9 @@ export const api = {
     newPassword: string,
   ): Promise<void> =>
     invoke("change_master_password", { currentPassword, newPassword }),
+
+  localChannelInfo: (): Promise<ChannelInfo | null> =>
+    invoke("local_channel_info"),
 
   defaultEnvironment: (): Promise<EnvironmentInfo> =>
     invoke("default_environment"),

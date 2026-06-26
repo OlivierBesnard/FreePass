@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use sqlx::SqlitePool;
 
 use crate::crypto::SecretKey;
+use crate::services::local_channel::ChannelHandle;
 
 /// Shared application state managed by `tauri::Builder::manage`.
 pub struct AppState {
@@ -12,9 +13,12 @@ pub struct AppState {
     /// OS app-data directory
     /// (e.g. `%APPDATA%\com.freepass.desktop` on Windows).
     pub app_data_dir: PathBuf,
-    /// In-memory vault session. Inner `None` means locked; keys live here only
-    /// while unlocked and are zeroized on lock/quit (THREAT F3). Never persisted.
-    pub session: Mutex<VaultSession>,
+    /// In-memory vault session, shared (via `Arc`) with the local channel server
+    /// so it sees the same unlock state. Keys live here only while unlocked and
+    /// are zeroized on lock/quit (THREAT F3). Never persisted.
+    pub session: Arc<Mutex<VaultSession>>,
+    /// The running loopback channel, if any (started on unlock, stopped on lock).
+    pub channel: Mutex<Option<ChannelHandle>>,
 }
 
 impl AppState {
@@ -22,7 +26,8 @@ impl AppState {
         Self {
             pool,
             app_data_dir,
-            session: Mutex::new(VaultSession::default()),
+            session: Arc::new(Mutex::new(VaultSession::default())),
+            channel: Mutex::new(None),
         }
     }
 }

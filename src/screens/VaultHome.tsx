@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { KeyRound, LockKeyhole, Plus, Search, Upload } from "lucide-react";
+import { KeyRound, LockKeyhole, Plus, Puzzle, Search, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage, type EntryDetail } from "../lib/api";
 import { useEnvironment, useEntries } from "../hooks/useVault";
@@ -8,6 +8,7 @@ import { EntryForm } from "../components/EntryForm";
 import { EntryDetailView } from "../components/EntryDetail";
 import { CommandPalette } from "../components/CommandPalette";
 import { ImportCsv } from "../components/ImportCsv";
+import { ExtensionPairing } from "../components/ExtensionPairing";
 
 /** The unlocked vault: list, search, Cmd+K, CRUD, and lock. */
 export function VaultHome({ onLock }: { onLock: () => void }) {
@@ -22,6 +23,7 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [pairingOpen, setPairingOpen] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -77,10 +79,19 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
           </Button>
           <button
             onClick={() => setImportOpen(true)}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-ink-600 transition-colors hover:bg-cream-300"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cream-400 text-ink-600 transition-colors hover:bg-cream-300"
             title="Importer un CSV"
+            aria-label="Importer un CSV"
           >
-            <Upload size={15} /> Importer
+            <Upload size={15} />
+          </button>
+          <button
+            onClick={() => setPairingOpen(true)}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cream-400 text-ink-600 transition-colors hover:bg-cream-300"
+            title="Connecter l'extension"
+            aria-label="Connecter l'extension"
+          >
+            <Puzzle size={15} />
           </button>
           <button
             onClick={handleLock}
@@ -154,6 +165,7 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
       {importOpen && envId && (
         <ImportCsv envId={envId} onClose={() => setImportOpen(false)} />
       )}
+      {pairingOpen && <ExtensionPairing onClose={() => setPairingOpen(false)} />}
     </main>
   );
 }

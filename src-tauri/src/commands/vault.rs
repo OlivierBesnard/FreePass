@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::services::vault;
+use crate::services::{local_channel, vault};
 use crate::state::AppState;
 
 /// What the UI needs to pick a screen: create vault / unlock / show vault.
@@ -18,8 +18,37 @@ pub struct VaultStatus {
     pub unlocked: bool,
 }
 
+/// Pairing details the UI shows so the extension can connect (DESIGN §7).
+#[derive(Serialize)]
+pub struct ChannelInfo {
+    pub port: u16,
+    pub token: String,
+}
+
 fn session_unavailable() -> AppError {
     AppError::Other("session de coffre indisponible".into())
+}
+
+fn channel_unavailable() -> AppError {
+    AppError::Other("canal local indisponible".into())
+}
+
+/// (Re)start the loopback channel for the current session.
+async fn start_channel(state: &AppState) -> AppResult<()> {
+    if let Some(handle) = state.channel.lock().map_err(|_| channel_unavailable())?.take() {
+        handle.stop();
+    }
+    let handle = local_channel::start(state.pool.clone(), state.session.clone()).await?;
+    *state.channel.lock().map_err(|_| channel_unavailable())? = Some(handle);
+    Ok(())
+}
+
+/// Stop the loopback channel (server shuts down, port closes).
+fn stop_channel(state: &AppState) -> AppResult<()> {
+    if let Some(handle) = state.channel.lock().map_err(|_| channel_unavailable())?.take() {
+        handle.stop();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -45,6 +74,7 @@ pub async fn create_vault(
         .lock()
         .map_err(|_| session_unavailable())?
         .unlock(vault_key);
+    start_channel(&state).await?;
     Ok(())
 }
 
@@ -59,17 +89,29 @@ pub async fn unlock(state: State<'_, AppState>, master_password: String) -> AppR
         .lock()
         .map_err(|_| session_unavailable())?
         .unlock(vault_key);
+    start_channel(&state).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn lock(state: State<'_, AppState>) -> AppResult<()> {
+    // Stop the channel first so it can never serve a locked vault.
+    stop_channel(&state)?;
     state
         .session
         .lock()
         .map_err(|_| session_unavailable())?
         .lock();
     Ok(())
+}
+
+#[tauri::command]
+pub fn local_channel_info(state: State<'_, AppState>) -> AppResult<Option<ChannelInfo>> {
+    let guard = state.channel.lock().map_err(|_| channel_unavailable())?;
+    Ok(guard.as_ref().map(|h| ChannelInfo {
+        port: h.port,
+        token: h.token.clone(),
+    }))
 }
 
 #[tauri::command]
