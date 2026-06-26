@@ -1,18 +1,9 @@
 import { useState } from "react";
 import { Copy, Eye, EyeOff, Pencil, Trash2, ExternalLink } from "lucide-react";
-import { toast } from "sonner";
 import type { EntryDetail as Entry } from "../lib/api";
 import { useArchiveEntry, useEntry } from "../hooks/useVault";
+import { copyPlain, copySecret } from "../lib/clipboard";
 import { Modal } from "./Modal";
-
-async function copy(value: string, label: string) {
-  try {
-    await navigator.clipboard.writeText(value);
-    toast.success(`${label} copié.`);
-  } catch {
-    toast.error("Impossible de copier.");
-  }
-}
 
 /** Read view for one entry: reveal/copy fields, edit, or archive. */
 export function EntryDetailView({
@@ -50,14 +41,14 @@ export function EntryDetailView({
             </Row>
           )}
           {entry.username && (
-            <Row label="Identifiant" onCopy={() => copy(entry.username!, "Identifiant")}>
+            <Row label="Identifiant" onCopy={() => copyPlain(entry.username!, "Identifiant")}>
               <span className="text-ink-800">{entry.username}</span>
             </Row>
           )}
           {entry.password && (
             <Row
               label="Mot de passe"
-              onCopy={() => copy(entry.password!, "Mot de passe")}
+              onCopy={() => copySecret(entry.password!, "Mot de passe")}
               extra={
                 <button
                   onClick={() => setReveal((v) => !v)}

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { KeyRound, LockKeyhole, Plus, Puzzle, Search, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage, type EntryDetail } from "../lib/api";
 import { useEnvironment, useEntries } from "../hooks/useVault";
+import { useAutoLock } from "../hooks/useAutoLock";
 import { Button, inputClass } from "../components/ui";
 import { EntryForm } from "../components/EntryForm";
 import { EntryDetailView } from "../components/EntryDetail";
@@ -36,14 +37,17 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  async function handleLock() {
+  const lockNow = useCallback(async () => {
     try {
       await api.lock();
       onLock();
     } catch (err) {
       toast.error(errorMessage(err));
     }
-  }
+  }, [onLock]);
+
+  // Auto-lock after inactivity (THREAT F11): zeroizes keys and stops the channel.
+  useAutoLock(lockNow);
 
   return (
     <main className="bg-mesh min-h-full">
@@ -94,7 +98,7 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
             <Puzzle size={15} />
           </button>
           <button
-            onClick={handleLock}
+            onClick={lockNow}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-ink-600 transition-colors hover:bg-cream-300"
           >
             <LockKeyhole size={15} /> Verrouiller
