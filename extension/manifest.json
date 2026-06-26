@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "FreePass",
+  "version": "0.1.0",
+  "description": "Pré-remplit vos identifiants depuis votre coffre FreePass local (127.0.0.1).",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FreePass"
+  },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "freepass@freepass.local",
+      "strict_min_version": "115.0"
+    }
+  }
+}

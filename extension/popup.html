@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      /* Studio palette, inline (extension CSP allows inline styles, not scripts). */
+      :root {
+        --cream-100: #fffbf6;
+        --cream-200: #faf5ef;
+        --cream-300: #f4ecdf;
+        --cream-400: #ebe0cd;
+        --ink-400: #b8a886;
+        --ink-500: #847465;
+        --ink-700: #3a2c20;
+        --ink-800: #2a1f17;
+        --brand-100: #f8e6df;
+        --brand-500: #c47b6b;
+        --brand-600: #ad6453;
+        --brand-700: #9b5a4a;
+        --danger-600: #983f30;
+      }
+      * { box-sizing: border-box; }
+      body {
+        width: 320px;
+        margin: 0;
+        font-family: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: var(--cream-200);
+        color: var(--ink-800);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--cream-400);
+        background: var(--cream-100);
+      }
+      .logo {
+        width: 26px; height: 26px; border-radius: 7px;
+        background: linear-gradient(135deg, #c47b6b, #b8923f);
+        color: white; font-weight: 700;
+        display: flex; align-items: center; justify-content: center;
+      }
+      h1 { font-size: 15px; margin: 0; }
+      main { padding: 12px 14px; }
+      .muted { color: var(--ink-500); font-size: 13px; }
+      .cred {
+        display: flex; align-items: center; gap: 10px;
+        padding: 9px 10px; border: 1px solid var(--cream-400);
+        border-radius: 10px; background: var(--cream-100); margin-bottom: 8px;
+      }
+      .cred .meta { min-width: 0; flex: 1; }
+      .cred .title { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .cred .user { font-size: 12px; color: var(--ink-400); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      button.fill {
+        border: none; cursor: pointer;
+        background: var(--brand-500); color: white;
+        font-size: 12px; font-weight: 500;
+        padding: 7px 12px; border-radius: 8px;
+      }
+      button.fill:hover { background: var(--brand-600); }
+      label { display: block; font-size: 12px; font-weight: 500; margin: 8px 0 4px; }
+      input {
+        width: 100%; height: 34px; padding: 0 9px;
+        border: 1px solid var(--cream-400); border-radius: 8px;
+        background: var(--cream-100); font-size: 13px; color: var(--ink-700);
+      }
+      input.mono { font-family: "JetBrains Mono", monospace; }
+      .primary {
+        width: 100%; height: 36px; margin-top: 12px; border: none; cursor: pointer;
+        background: var(--brand-500); color: white; font-weight: 600; border-radius: 8px;
+      }
+      .primary:hover { background: var(--brand-600); }
+      .link { background: none; border: none; color: var(--brand-700); cursor: pointer; font-size: 12px; padding: 6px 0; }
+      .hint { font-size: 11px; color: var(--ink-400); margin-top: 10px; line-height: 1.4; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="logo">F</span>
+      <h1>FreePass</h1>
+    </header>
+    <main id="root">
+      <p class="muted">Chargement…</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
