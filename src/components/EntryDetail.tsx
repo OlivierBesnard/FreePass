@@ -3,6 +3,7 @@ import { Copy, Eye, EyeOff, Pencil, Trash2, ExternalLink } from "lucide-react";
 import type { EntryDetail as Entry } from "../lib/api";
 import { useArchiveEntry, useEntry } from "../hooks/useVault";
 import { copyPlain, copySecret } from "../lib/clipboard";
+import { openExternal } from "../lib/openExternal";
 import { Modal } from "./Modal";
 
 /** Read view for one entry: reveal/copy fields, edit, or archive. */
@@ -29,15 +30,14 @@ export function EntryDetailView({
         <div className="space-y-4">
           {entry.url && (
             <Row label="Site web">
-              <a
-                href={entry.url.startsWith("http") ? entry.url : `https://${entry.url}`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-brand-700 hover:underline"
+              <button
+                onClick={() => openExternal(entry.url!)}
+                title="Ouvrir dans le navigateur"
+                className="inline-flex max-w-full items-center gap-1 text-left text-brand-700 hover:underline"
               >
-                {entry.url}
-                <ExternalLink size={13} />
-              </a>
+                <span className="truncate">{entry.url}</span>
+                <ExternalLink size={13} className="shrink-0" />
+              </button>
             </Row>
           )}
           {entry.username && (

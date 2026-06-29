@@ -119,10 +119,10 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
                   onClick={() => setSelectedId(e.id)}
                   className="row-hover flex w-full items-center gap-3 rounded-xl border border-cream-400 bg-card px-4 py-3 text-left shadow-soft transition-colors"
                 >
-                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-100 text-brand-700">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-100 text-brand-700">
                     <KeyRound size={17} />
                   </span>
-                  <span className="min-w-0">
+                  <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium text-ink-800">
                       {e.title}
                     </span>
