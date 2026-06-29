@@ -81,6 +81,10 @@ export const api = {
   ): Promise<void> => invoke("update_entry", { envId, entryId, input }),
   archiveEntry: (envId: string, entryId: string): Promise<void> =>
     invoke("archive_entry", { envId, entryId }),
+  listArchivedEntries: (envId: string): Promise<EntrySummary[]> =>
+    invoke("list_archived_entries", { envId }),
+  restoreEntry: (envId: string, entryId: string): Promise<void> =>
+    invoke("restore_entry", { envId, entryId }),
   deleteEntry: (envId: string, entryId: string): Promise<void> =>
     invoke("delete_entry", { envId, entryId }),
 

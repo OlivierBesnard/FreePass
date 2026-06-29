@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { KeyRound, LockKeyhole, Plus, Puzzle, Search, Upload } from "lucide-react";
+import { Archive, KeyRound, LockKeyhole, Plus, Puzzle, Search, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage, type EntryDetail } from "../lib/api";
 import { useEnvironment, useEntries } from "../hooks/useVault";
@@ -10,6 +10,7 @@ import { EntryDetailView } from "../components/EntryDetail";
 import { CommandPalette } from "../components/CommandPalette";
 import { ImportCsv } from "../components/ImportCsv";
 import { ExtensionPairing } from "../components/ExtensionPairing";
+import { ArchivedEntries } from "../components/ArchivedEntries";
 
 /** The unlocked vault: list, search, Cmd+K, CRUD, and lock. */
 export function VaultHome({ onLock }: { onLock: () => void }) {
@@ -25,6 +26,7 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [pairingOpen, setPairingOpen] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -88,6 +90,14 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
             aria-label="Importer un CSV"
           >
             <Upload size={15} />
+          </button>
+          <button
+            onClick={() => setArchivedOpen(true)}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cream-400 text-ink-600 transition-colors hover:bg-cream-300"
+            title="Identifiants archivés"
+            aria-label="Identifiants archivés"
+          >
+            <Archive size={15} />
           </button>
           <button
             onClick={() => setPairingOpen(true)}
@@ -170,6 +180,9 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
         <ImportCsv envId={envId} onClose={() => setImportOpen(false)} />
       )}
       {pairingOpen && <ExtensionPairing onClose={() => setPairingOpen(false)} />}
+      {archivedOpen && envId && (
+        <ArchivedEntries envId={envId} onClose={() => setArchivedOpen(false)} />
+      )}
     </main>
   );
 }

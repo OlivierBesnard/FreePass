@@ -4,6 +4,7 @@ import type { EntryDetail as Entry } from "../lib/api";
 import { useArchiveEntry, useEntry } from "../hooks/useVault";
 import { copyPlain, copySecret } from "../lib/clipboard";
 import { openExternal } from "../lib/openExternal";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Modal } from "./Modal";
 
 /** Read view for one entry: reveal/copy fields, edit, or archive. */
@@ -21,6 +22,7 @@ export function EntryDetailView({
   const { data: entry, isLoading } = useEntry(envId, entryId);
   const archive = useArchiveEntry(envId);
   const [reveal, setReveal] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
 
   return (
     <Modal title={entry?.title ?? "Identifiant"} onClose={onClose}>
@@ -72,10 +74,7 @@ export function EntryDetailView({
 
           <div className="flex justify-end gap-2 border-t border-cream-400 pt-4">
             <button
-              onClick={() => {
-                archive.mutate(entry.id);
-                onClose();
-              }}
+              onClick={() => setConfirmArchive(true)}
               className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-danger-600 transition-colors hover:bg-danger-50"
             >
               <Trash2 size={15} /> Archiver
@@ -87,6 +86,21 @@ export function EntryDetailView({
               <Pencil size={15} /> Modifier
             </button>
           </div>
+
+          {confirmArchive && (
+            <ConfirmDialog
+              title="Archiver cet identifiant ?"
+              message={`« ${entry.title} » sera déplacé dans les archivés. Vous pourrez le restaurer ou le supprimer définitivement.`}
+              confirmLabel="Archiver"
+              busy={archive.isPending}
+              onConfirm={() => {
+                archive.mutate(entry.id);
+                setConfirmArchive(false);
+                onClose();
+              }}
+              onClose={() => setConfirmArchive(false)}
+            />
+          )}
         </div>
       )}
     </Modal>

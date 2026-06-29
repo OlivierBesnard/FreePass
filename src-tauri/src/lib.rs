@@ -12,7 +12,7 @@ use crate::commands::db::db_health_check;
 use crate::commands::generator::generate_password;
 use crate::commands::entries::{
     archive_entry, create_entry, default_environment, delete_entry, get_entry, import_entries,
-    list_entries, update_entry,
+    list_archived_entries, list_entries, restore_entry, update_entry,
 };
 use crate::commands::vault::{
     change_master_password, create_vault, local_channel_info, lock, unlock, vault_status,
@@ -59,6 +59,8 @@ pub fn run() {
             create_entry,
             update_entry,
             archive_entry,
+            list_archived_entries,
+            restore_entry,
             delete_entry,
             import_entries,
             generate_password,

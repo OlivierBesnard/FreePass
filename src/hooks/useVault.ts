@@ -76,13 +76,51 @@ export function useImportEntries(envId: string | undefined) {
   });
 }
 
+/** Archived ("trash") entries for an environment. */
+export function useArchivedEntries(envId: string | undefined) {
+  return useQuery({
+    queryKey: ["archived", envId],
+    queryFn: () => api.listArchivedEntries(envId as string),
+    enabled: !!envId,
+  });
+}
+
+function invalidateLists(qc: ReturnType<typeof useQueryClient>) {
+  void qc.invalidateQueries({ queryKey: ["entries"] });
+  void qc.invalidateQueries({ queryKey: ["archived"] });
+}
+
 export function useArchiveEntry(envId: string | undefined) {
-  const invalidate = useEntryInvalidation();
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (entryId: string) => api.archiveEntry(envId as string, entryId),
     onSuccess: () => {
-      void invalidate();
+      invalidateLists(qc);
       toast.success("Identifiant archivé.");
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+}
+
+export function useRestoreEntry(envId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (entryId: string) => api.restoreEntry(envId as string, entryId),
+    onSuccess: () => {
+      invalidateLists(qc);
+      toast.success("Identifiant restauré.");
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+}
+
+export function useDeleteEntry(envId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (entryId: string) => api.deleteEntry(envId as string, entryId),
+    onSuccess: () => {
+      invalidateLists(qc);
+      toast.success("Identifiant supprimé définitivement.");
     },
     onError: (e) => toast.error(errorMessage(e)),
   });

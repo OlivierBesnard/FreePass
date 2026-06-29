@@ -233,6 +233,49 @@ pub async fn update_entry(
     Ok(())
 }
 
+/// List archived (soft-deleted) entries — the "trash". Clear metadata only.
+pub async fn list_archived_entries(
+    pool: &SqlitePool,
+    env_id: &str,
+) -> AppResult<Vec<EntrySummary>> {
+    let rows = sqlx::query(
+        "SELECT id, env_id, type, title, url, updated_at FROM entries \
+         WHERE env_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC",
+    )
+    .bind(env_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| EntrySummary {
+            id: r.get("id"),
+            env_id: r.get("env_id"),
+            kind: r.get("type"),
+            title: r.get("title"),
+            url: r.get("url"),
+            updated_at: r.get("updated_at"),
+        })
+        .collect())
+}
+
+/// Restore an archived entry (un-archive). Its encrypted fields are untouched.
+pub async fn restore_entry(pool: &SqlitePool, env_id: &str, entry_id: &str) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    let res = sqlx::query(
+        "UPDATE entries SET archived_at = NULL, updated_at = ? \
+         WHERE id = ? AND env_id = ? AND archived_at IS NOT NULL",
+    )
+    .bind(&now)
+    .bind(entry_id)
+    .bind(env_id)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
 /// Soft-delete (archive) an entry.
 pub async fn archive_entry(pool: &SqlitePool, env_id: &str, entry_id: &str) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
@@ -463,6 +506,34 @@ mod tests {
         let gh = list.iter().find(|e| e.title == "GitHub").unwrap();
         let got = get_entry(&pool, &env_key, &env_id, &gh.id).await.unwrap();
         assert_eq!(got.password.as_deref(), Some("x"));
+    }
+
+    #[tokio::test]
+    async fn archived_entries_can_be_listed_and_restored() {
+        let (pool, env_key, env_id) = setup().await;
+        let id = create_entry(&pool, &env_key, &env_id, &login("X", None, "u", "p")).await.unwrap();
+
+        archive_entry(&pool, &env_id, &id).await.unwrap();
+        assert_eq!(list_entries(&pool, &env_id, None).await.unwrap().len(), 0);
+        let archived = list_archived_entries(&pool, &env_id).await.unwrap();
+        assert_eq!(archived.len(), 1, "archived entry should be in the trash");
+
+        restore_entry(&pool, &env_id, &id).await.unwrap();
+        assert_eq!(list_entries(&pool, &env_id, None).await.unwrap().len(), 1);
+        assert_eq!(list_archived_entries(&pool, &env_id).await.unwrap().len(), 0);
+        // Restored entry still decrypts.
+        let got = get_entry(&pool, &env_key, &env_id, &id).await.unwrap();
+        assert_eq!(got.password.as_deref(), Some("p"));
+    }
+
+    #[tokio::test]
+    async fn restoring_a_live_entry_is_not_found() {
+        let (pool, env_key, env_id) = setup().await;
+        let id = create_entry(&pool, &env_key, &env_id, &login("X", None, "u", "p")).await.unwrap();
+        assert!(matches!(
+            restore_entry(&pool, &env_id, &id).await,
+            Err(AppError::NotFound)
+        ));
     }
 
     #[tokio::test]

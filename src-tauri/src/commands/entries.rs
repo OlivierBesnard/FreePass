@@ -121,6 +121,29 @@ pub async fn archive_entry(
 }
 
 #[tauri::command]
+pub async fn list_archived_entries(
+    state: State<'_, AppState>,
+    env_id: String,
+) -> AppResult<Vec<EntrySummary>> {
+    if !state.session.lock().map_err(|_| session_unavailable())?.is_unlocked() {
+        return Err(AppError::VaultLocked);
+    }
+    entries::list_archived_entries(&state.pool, &env_id).await
+}
+
+#[tauri::command]
+pub async fn restore_entry(
+    state: State<'_, AppState>,
+    env_id: String,
+    entry_id: String,
+) -> AppResult<()> {
+    if !state.session.lock().map_err(|_| session_unavailable())?.is_unlocked() {
+        return Err(AppError::VaultLocked);
+    }
+    entries::restore_entry(&state.pool, &env_id, &entry_id).await
+}
+
+#[tauri::command]
 pub async fn delete_entry(
     state: State<'_, AppState>,
     env_id: String,
