@@ -2,13 +2,15 @@
 //! environment key from the unlocked session (never from disk in the clear) and
 //! delegates the crypto to `services::entries`.
 
+use std::collections::HashMap;
+
 use sqlx::Row;
 use tauri::State;
 
 use crate::crypto::SecretKey;
 use crate::error::{AppError, AppResult};
 use crate::models::entry::{EntryDetail, EntryInput, EntrySummary, EnvironmentInfo};
-use crate::services::{entries, vault};
+use crate::services::{entries, favicon, vault};
 use crate::state::AppState;
 
 fn session_unavailable() -> AppError {
@@ -75,6 +77,34 @@ pub async fn get_entry(
 ) -> AppResult<EntryDetail> {
     let env_key = resolve_env_key(&state, &env_id).await?;
     entries::get_entry(&state.pool, &env_key, &env_id, &entry_id).await
+}
+
+/// Fetch the favicon for an entry directly from its site and store it encrypted,
+/// returning the `data:` URL (or None if nothing usable was found). Best-effort:
+/// called automatically by the UI after a save when a URL is present, and never
+/// blocks the save itself. The fetch only contacts the entry's own site.
+#[tauri::command]
+pub async fn refresh_entry_icon(
+    state: State<'_, AppState>,
+    env_id: String,
+    entry_id: String,
+    url: String,
+) -> AppResult<Option<String>> {
+    let env_key = resolve_env_key(&state, &env_id).await?;
+    let icon = favicon::fetch_favicon(&url).await?;
+    entries::set_icon(&state.pool, &env_key, &env_id, &entry_id, icon.as_deref()).await?;
+    Ok(icon)
+}
+
+/// All stored favicons for the environment, keyed by entry id — the UI overlays
+/// these on the list without decrypting secret fields.
+#[tauri::command]
+pub async fn entry_icons(
+    state: State<'_, AppState>,
+    env_id: String,
+) -> AppResult<HashMap<String, String>> {
+    let env_key = resolve_env_key(&state, &env_id).await?;
+    entries::load_icons(&state.pool, &env_key, &env_id).await
 }
 
 #[tauri::command]

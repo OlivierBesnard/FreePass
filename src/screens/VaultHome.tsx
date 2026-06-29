@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Archive, KeyRound, LockKeyhole, Plus, Puzzle, Search, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage, type EntryDetail } from "../lib/api";
-import { useEnvironment, useEntries } from "../hooks/useVault";
+import { useEnvironment, useEntries, useEntryIcons } from "../hooks/useVault";
 import { useAutoLock } from "../hooks/useAutoLock";
 import { Button, inputClass } from "../components/ui";
 import { EntryForm } from "../components/EntryForm";
@@ -19,6 +19,7 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
 
   const [search, setSearch] = useState("");
   const { data: entries = [], isLoading } = useEntries(envId, search);
+  const { data: icons = {} } = useEntryIcons(envId);
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<EntryDetail | null>(null);
@@ -48,7 +49,8 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
     }
   }, [onLock]);
 
-  // Auto-lock after inactivity (THREAT F11): zeroizes keys and stops the channel.
+  // Auto-lock after inactivity (THREAT F11): zeroizes keys. The channel stays
+  // up but serves no credentials while locked.
   useAutoLock(lockNow);
 
   return (
@@ -129,9 +131,7 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
                   onClick={() => setSelectedId(e.id)}
                   className="row-hover flex w-full items-center gap-3 rounded-xl border border-cream-400 bg-card px-4 py-3 text-left shadow-soft transition-colors"
                 >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-100 text-brand-700">
-                    <KeyRound size={17} />
-                  </span>
+                  <EntryIcon icon={icons[e.id]} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium text-ink-800">
                       {e.title}
@@ -184,6 +184,28 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
         <ArchivedEntries envId={envId} onClose={() => setArchivedOpen(false)} />
       )}
     </main>
+  );
+}
+
+/** A site favicon if we have one, else the default key glyph. */
+function EntryIcon({ icon }: { icon?: string }) {
+  const [broken, setBroken] = useState(false);
+  if (icon && !broken) {
+    return (
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-cream-400 bg-card">
+        <img
+          src={icon}
+          alt=""
+          className="h-5 w-5 object-contain"
+          onError={() => setBroken(true)}
+        />
+      </span>
+    );
+  }
+  return (
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-100 text-brand-700">
+      <KeyRound size={17} />
+    </span>
   );
 }
 

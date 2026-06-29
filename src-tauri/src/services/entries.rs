@@ -3,6 +3,8 @@
 //! (CRYPTO_SPEC §4). `title`/`url` are clear metadata (assumed, F5). Search runs
 //! against the local DB on clear columns only — never leaves the machine.
 
+use std::collections::HashMap;
+
 use chrono::Utc;
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
@@ -14,8 +16,15 @@ use crate::models::entry::{EntryDetail, EntryInput, EntrySummary};
 /// Entry type handled in v1. `secret` / `env_var` come with the agent feature.
 const ENTRY_TYPE_LOGIN: &str = "login";
 
-/// The encryptable login fields, in a stable order.
+/// The encryptable login fields, in a stable order. The favicon (`icon`) is a
+/// separate encrypted field that is *not* part of this set: it is fetched
+/// independently and must survive an entry edit (see `update_entry`).
 const LOGIN_FIELDS: [&str; 3] = ["username", "password", "notes"];
+
+/// Field name under which the site favicon (a `data:` URL) is stored, encrypted
+/// under the env key with AAD bound to env_id + entry_id + "icon" like any
+/// other field.
+const ICON_FIELD: &str = "icon";
 
 fn nonce_from(blob: Vec<u8>) -> AppResult<[u8; crypto::aead::NONCE_LEN]> {
     blob.try_into()
@@ -102,6 +111,7 @@ pub async fn get_entry(
         username: None,
         password: None,
         notes: None,
+        icon: None,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     };
@@ -126,6 +136,7 @@ pub async fn get_entry(
             "username" => detail.username = Some(value),
             "password" => detail.password = Some(value),
             "notes" => detail.notes = Some(value),
+            "icon" => detail.icon = Some(value),
             _ => {}
         }
     }
@@ -210,8 +221,11 @@ pub async fn update_entry(
         return Err(AppError::NotFound);
     }
 
-    sqlx::query("DELETE FROM entry_fields WHERE entry_id = ?")
+    // Replace only the login fields; the favicon (`icon`) is fetched
+    // independently and must survive an edit, so it is left untouched.
+    sqlx::query("DELETE FROM entry_fields WHERE entry_id = ? AND field_name <> ?")
         .bind(entry_id)
+        .bind(ICON_FIELD)
         .execute(&mut *tx)
         .await?;
     for name in LOGIN_FIELDS {
@@ -363,6 +377,85 @@ pub async fn import_entries(
     }
     tx.commit().await?;
     Ok(created)
+}
+
+/// Store (or replace) the encrypted favicon for an entry. The icon is a `data:`
+/// URL string, sealed under the env key with AAD bound to env_id + entry_id +
+/// "icon" — exactly like the other fields. No-op safety: callers fetch the icon
+/// best-effort, so a `None` data URL clears any stored icon.
+pub async fn set_icon(
+    pool: &SqlitePool,
+    env_key: &SecretKey,
+    env_id: &str,
+    entry_id: &str,
+    data_url: Option<&str>,
+) -> AppResult<()> {
+    // Make sure the entry exists in this environment before writing a field.
+    let exists = sqlx::query("SELECT 1 FROM entries WHERE id = ? AND env_id = ?")
+        .bind(entry_id)
+        .bind(env_id)
+        .fetch_optional(pool)
+        .await?
+        .is_some();
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+
+    match data_url.filter(|s| !s.is_empty()) {
+        Some(value) => {
+            let sealed = crypto::encrypt_field(env_key, env_id, entry_id, ICON_FIELD, value.as_bytes())?;
+            sqlx::query(
+                "INSERT OR REPLACE INTO entry_fields (entry_id, field_name, nonce, ciphertext) \
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(entry_id)
+            .bind(ICON_FIELD)
+            .bind(&sealed.nonce[..])
+            .bind(&sealed.ciphertext)
+            .execute(pool)
+            .await?;
+        }
+        None => {
+            sqlx::query("DELETE FROM entry_fields WHERE entry_id = ? AND field_name = ?")
+                .bind(entry_id)
+                .bind(ICON_FIELD)
+                .execute(pool)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Decrypt every stored favicon for a (non-archived) environment, keyed by entry
+/// id. Used to overlay icons on the list view without decrypting secret fields.
+pub async fn load_icons(
+    pool: &SqlitePool,
+    env_key: &SecretKey,
+    env_id: &str,
+) -> AppResult<HashMap<String, String>> {
+    let rows = sqlx::query(
+        "SELECT f.entry_id, f.nonce, f.ciphertext FROM entry_fields f \
+         JOIN entries e ON e.id = f.entry_id \
+         WHERE f.field_name = ? AND e.env_id = ? AND e.archived_at IS NULL",
+    )
+    .bind(ICON_FIELD)
+    .bind(env_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = HashMap::with_capacity(rows.len());
+    for r in rows {
+        let entry_id: String = r.get("entry_id");
+        let sealed = Sealed {
+            nonce: nonce_from(r.get("nonce"))?,
+            ciphertext: r.get("ciphertext"),
+        };
+        let plain = crypto::decrypt_field(env_key, env_id, &entry_id, ICON_FIELD, &sealed)?;
+        if let Ok(value) = String::from_utf8(plain.to_vec()) {
+            out.insert(entry_id, value);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -532,6 +625,53 @@ mod tests {
         let id = create_entry(&pool, &env_key, &env_id, &login("X", None, "u", "p")).await.unwrap();
         assert!(matches!(
             restore_entry(&pool, &env_id, &id).await,
+            Err(AppError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn icon_is_stored_encrypted_survives_edits_and_clears() {
+        let (pool, env_key, env_id) = setup().await;
+        let id = create_entry(&pool, &env_key, &env_id, &login("GitHub", Some("github.com"), "a", "x"))
+            .await
+            .unwrap();
+
+        let data_url = "data:image/png;base64,AAAA";
+        set_icon(&pool, &env_key, &env_id, &id, Some(data_url)).await.unwrap();
+
+        // Round-trips on the detail and via the list-overlay loader.
+        let got = get_entry(&pool, &env_key, &env_id, &id).await.unwrap();
+        assert_eq!(got.icon.as_deref(), Some(data_url));
+        let icons = load_icons(&pool, &env_key, &env_id).await.unwrap();
+        assert_eq!(icons.get(&id).map(String::as_str), Some(data_url));
+
+        // Stored encrypted: the data URL must not appear in the clear on disk.
+        let ct: Vec<u8> = sqlx::query("SELECT ciphertext FROM entry_fields WHERE entry_id = ? AND field_name = 'icon'")
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get("ciphertext");
+        assert!(!ct.windows(4).any(|w| w == b"AAAA"), "icon leaked in the clear");
+
+        // Editing the entry must NOT drop the icon.
+        update_entry(&pool, &env_key, &env_id, &id, &login("GitHub", Some("github.com"), "a2", "x2"))
+            .await
+            .unwrap();
+        let after = get_entry(&pool, &env_key, &env_id, &id).await.unwrap();
+        assert_eq!(after.icon.as_deref(), Some(data_url), "icon must survive an edit");
+        assert_eq!(after.username.as_deref(), Some("a2"));
+
+        // Passing None clears it.
+        set_icon(&pool, &env_key, &env_id, &id, None).await.unwrap();
+        assert_eq!(get_entry(&pool, &env_key, &env_id, &id).await.unwrap().icon, None);
+    }
+
+    #[tokio::test]
+    async fn set_icon_on_missing_entry_is_not_found() {
+        let (pool, env_key, env_id) = setup().await;
+        assert!(matches!(
+            set_icon(&pool, &env_key, &env_id, "nope", Some("data:image/png;base64,AA")).await,
             Err(AppError::NotFound)
         ));
     }

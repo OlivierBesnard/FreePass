@@ -68,6 +68,8 @@ pub struct Credential {
     pub url: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
+    /// Site favicon as a `data:` URL, if one was fetched (cosmetic).
+    pub icon: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -176,10 +178,27 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|v| v.to_str().ok())
 }
 
-fn is_allowed_origin(origin: Option<&str>) -> bool {
+fn is_extension_origin(o: &str) -> bool {
+    EXTENSION_SCHEMES.iter().any(|s| o.starts_with(s))
+}
+
+/// Decide whether to answer a request based on its `Origin`, and what to echo
+/// back for CORS:
+/// - **`Ok(Some(o))`** — an extension origin (Firefox `moz-extension://`, or
+///   Chrome when it doesn't bypass CORS): allowed, echo `o` as ACAO.
+/// - **`Ok(None)`** — **no Origin header**: this is the *normal* Chrome case.
+///   With `host_permissions` for `127.0.0.1`, Chrome bypasses CORS and sends the
+///   extension's fetch with **no Origin** (just like a direct navigation). We
+///   must allow it; no ACAO is echoed (Chrome reads the body regardless). The
+///   bearer token — not the Origin — is the real authentication gate (F7/F14).
+/// - **`Err(())`** — a web-page Origin (`https://…`): rejected. A real web page
+///   (phishing, F6) always sends its Origin, so this still slams the door on
+///   cross-origin reads.
+fn classify_origin(origin: Option<&str>) -> Result<Option<&str>, ()> {
     match origin {
-        Some(o) => EXTENSION_SCHEMES.iter().any(|s| o.starts_with(s)),
-        None => false,
+        None => Ok(None),
+        Some(o) if is_extension_origin(o) => Ok(Some(o)),
+        Some(_) => Err(()),
     }
 }
 
@@ -255,6 +274,7 @@ pub async fn credentials_for_origin(
                 url: detail.url,
                 username: detail.username,
                 password: detail.password,
+                icon: detail.icon,
             });
         }
     }
@@ -284,16 +304,18 @@ fn json_response(status: StatusCode, allow_origin: Option<&str>, body: String) -
 }
 
 async fn preflight(headers: HeaderMap) -> Response {
+    // A CORS preflight always carries an Origin; only extension origins get one.
+    // (Chrome's host_permissions fetch bypasses CORS and sends no preflight.)
     let origin = header(&headers, "origin");
-    if !is_allowed_origin(origin) {
+    let Some(echo) = origin.filter(|o| is_extension_origin(o)) else {
         return Response::builder()
             .status(StatusCode::FORBIDDEN)
             .body(Body::empty())
             .unwrap();
-    }
+    };
     Response::builder()
         .status(StatusCode::NO_CONTENT)
-        .header("access-control-allow-origin", origin.unwrap())
+        .header("access-control-allow-origin", echo)
         .header("access-control-allow-methods", "POST, GET, OPTIONS")
         .header("access-control-allow-headers", "authorization, content-type")
         // Grant Private Network Access so Chrome lets the extension reach 127.0.0.1.
@@ -304,9 +326,20 @@ async fn preflight(headers: HeaderMap) -> Response {
 }
 
 async fn health(State(state): State<ChannelState>, headers: HeaderMap) -> Response {
-    let origin = header(&headers, "origin");
-    if !is_allowed_origin(origin) {
-        return json_response(StatusCode::FORBIDDEN, None, r#"{"error":"origin"}"#.into());
+    let echo = match classify_origin(header(&headers, "origin")) {
+        Ok(e) => e,
+        Err(()) => return json_response(StatusCode::FORBIDDEN, None, r#"{"error":"origin"}"#.into()),
+    };
+    // Require the pairing token here too: with the channel now always-on on a
+    // guessable fixed port, an unauthenticated `/health` would let any local
+    // process read the lock state as an oracle (THREAT F7). The paired extension
+    // already holds the token.
+    if !bearer_ok(header(&headers, "authorization"), &state.token) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            echo,
+            r#"{"error":"unauthorized"}"#.into(),
+        );
     }
     let unlocked = state
         .session
@@ -314,7 +347,7 @@ async fn health(State(state): State<ChannelState>, headers: HeaderMap) -> Respon
         .map(|s| s.is_unlocked())
         .unwrap_or(false);
     let body = format!(r#"{{"status":"ok","unlocked":{unlocked}}}"#);
-    json_response(StatusCode::OK, origin, body)
+    json_response(StatusCode::OK, echo, body)
 }
 
 async fn credentials(
@@ -322,16 +355,15 @@ async fn credentials(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let origin = header(&headers, "origin");
-    if !is_allowed_origin(origin) {
-        return json_response(StatusCode::FORBIDDEN, None, r#"{"error":"origin"}"#.into());
-    }
-    let allow = origin.unwrap();
+    let echo = match classify_origin(header(&headers, "origin")) {
+        Ok(e) => e,
+        Err(()) => return json_response(StatusCode::FORBIDDEN, None, r#"{"error":"origin"}"#.into()),
+    };
 
     if !bearer_ok(header(&headers, "authorization"), &state.token) {
         return json_response(
             StatusCode::UNAUTHORIZED,
-            Some(allow),
+            echo,
             r#"{"error":"unauthorized"}"#.into(),
         );
     }
@@ -341,7 +373,7 @@ async fn credentials(
         Err(_) => {
             return json_response(
                 StatusCode::BAD_REQUEST,
-                Some(allow),
+                echo,
                 r#"{"error":"bad_request"}"#.into(),
             )
         }
@@ -350,10 +382,10 @@ async fn credentials(
     match credentials_for_origin(&state.pool, &state.session, &req.origin).await {
         Ok(creds) => {
             let body = serde_json::to_string(&creds).unwrap_or_else(|_| "[]".into());
-            json_response(StatusCode::OK, Some(allow), body)
+            json_response(StatusCode::OK, echo, body)
         }
         // Locked or any error => serve nothing, never leak why.
-        Err(_) => json_response(StatusCode::FORBIDDEN, Some(allow), r#"{"error":"locked"}"#.into()),
+        Err(_) => json_response(StatusCode::FORBIDDEN, echo, r#"{"error":"locked"}"#.into()),
     }
 }
 
@@ -364,12 +396,15 @@ mod tests {
     use crate::models::entry::EntryInput;
 
     #[test]
-    fn only_extension_origins_are_allowed() {
-        assert!(is_allowed_origin(Some("chrome-extension://abcdef")));
-        assert!(is_allowed_origin(Some("moz-extension://abcdef")));
-        assert!(!is_allowed_origin(Some("https://evil.com")));
-        assert!(!is_allowed_origin(Some("http://localhost")));
-        assert!(!is_allowed_origin(None));
+    fn origin_classification_allows_extensions_and_no_origin_but_rejects_web() {
+        // Extension origin (Firefox, or Chrome without the CORS bypass): echoed.
+        assert_eq!(classify_origin(Some("chrome-extension://abcdef")), Ok(Some("chrome-extension://abcdef")));
+        assert_eq!(classify_origin(Some("moz-extension://abcdef")), Ok(Some("moz-extension://abcdef")));
+        // No Origin = the normal Chrome host_permissions fetch: allowed, no echo.
+        assert_eq!(classify_origin(None), Ok(None));
+        // A web page always sends its Origin → rejected (F6).
+        assert_eq!(classify_origin(Some("https://evil.com")), Err(()));
+        assert_eq!(classify_origin(Some("http://localhost")), Err(()));
     }
 
     #[test]
@@ -534,8 +569,31 @@ mod tests {
         assert_eq!(s, 200);
         assert!(body.contains("hunter2"), "expected credential, got: {body}");
 
-        // /health is reachable by the extension (used to discover the port).
-        let (s, body) = http(port, "GET", "/health", &[("Origin", ext_origin)], "").await;
+        // THE REAL CHROME CASE: no Origin header at all (Chrome omits it for an
+        // extension host_permissions fetch). Token alone must be enough => 200.
+        let (s, body) = http(
+            port,
+            "POST",
+            "/credentials",
+            &[("Authorization", &auth), ("Content-Type", "application/json")],
+            req_body,
+        )
+        .await;
+        assert_eq!(s, 200, "a no-Origin request (Chrome) with a valid token must be served");
+        assert!(body.contains("hunter2"), "expected credential for no-Origin request, got: {body}");
+
+        // No Origin and no token => still 401 (token is the real gate).
+        let (s, _) = http(port, "GET", "/health", &[], "").await;
+        assert_eq!(s, 401, "no-Origin + no-token must be rejected");
+
+        // /health requires the token (an unauthenticated probe is refused so a
+        // local process can't read the lock-state oracle — THREAT F7).
+        let (s, _) = http(port, "GET", "/health", &[("Origin", ext_origin)], "").await;
+        assert_eq!(s, 401, "unauthenticated /health must be rejected");
+
+        // With the token, /health is reachable (used to discover the port).
+        let (s, body) =
+            http(port, "GET", "/health", &[("Origin", ext_origin), ("Authorization", &auth)], "").await;
         assert_eq!(s, 200);
         assert!(body.contains("unlocked"));
 
@@ -557,6 +615,41 @@ mod tests {
             body.to_lowercase().contains("access-control-allow-private-network"),
             "preflight must grant private network access"
         );
+
+        handle.stop();
+    }
+
+    #[tokio::test]
+    async fn locked_vault_is_discoverable_but_serves_no_credentials() {
+        // The channel stays up while the vault is locked: /health must answer
+        // (so the extension can discover the app and show "locked"), but
+        // /credentials must be refused — no secret is served (THREAT F7/F14).
+        let pool = init_pool_with_url("sqlite::memory:").await.unwrap();
+        vault::create_vault(&pool, b"pw").await.unwrap();
+
+        // Locked session (never unlocked).
+        let session = Arc::new(Mutex::new(VaultSession::default()));
+        let handle = start(pool.clone(), session.clone()).await.unwrap();
+        let port = handle.port;
+        let ext_origin = "chrome-extension://abc";
+        let auth = format!("Bearer {}", handle.token);
+
+        // /health (with the token) is reachable and reports the locked state.
+        let (s, body) =
+            http(port, "GET", "/health", &[("Origin", ext_origin), ("Authorization", &auth)], "").await;
+        assert_eq!(s, 200, "locked app must still be discoverable");
+        assert!(body.contains("\"unlocked\":false"), "health must report locked, got: {body}");
+
+        // /credentials is refused even with a valid token + extension origin.
+        let (s, _) = http(
+            port,
+            "POST",
+            "/credentials",
+            &[("Origin", ext_origin), ("Authorization", &auth), ("Content-Type", "application/json")],
+            r#"{"origin":"https://github.com/login"}"#,
+        )
+        .await;
+        assert_eq!(s, 403, "a locked vault must never serve credentials");
 
         handle.stop();
     }

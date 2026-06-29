@@ -38,12 +38,18 @@ async function getActiveTab() {
   return tab;
 }
 
-// Find the port the app is listening on (it's one of CANDIDATE_PORTS).
-async function discoverPort() {
+// Find the port the app is listening on (it's one of CANDIDATE_PORTS). /health
+// requires the pairing token (so a local process can't probe the lock state).
+async function discoverPort(token) {
   for (const port of CANDIDATE_PORTS) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, { method: "GET" });
-      if (res.ok) return port;
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      // 200 = found; 401 = it IS FreePass but the token is wrong — still the
+      // right port, so the /credentials call can surface the auth error.
+      if (res.ok || res.status === 401) return port;
     } catch {
       // try next
     }
@@ -52,7 +58,7 @@ async function discoverPort() {
 }
 
 async function fetchCredentials(token, origin) {
-  const port = await discoverPort();
+  const port = await discoverPort(token);
   if (port === null) throw "no-app";
   const res = await fetch(`http://127.0.0.1:${port}/credentials`, {
     method: "POST",
@@ -121,7 +127,11 @@ function renderCredentials(creds) {
     ]);
     const btn = el("button", { className: "fill", textContent: "Remplir" });
     btn.addEventListener("click", () => fill(cred));
-    root.append(el("div", { className: "cred" }, [meta, btn]));
+    // The icon is a self-contained data: URL served by the app — no network.
+    const lead = cred.icon
+      ? el("img", { className: "icon", src: cred.icon, alt: "" })
+      : el("span", { className: "icon icon-fallback", textContent: "🔑" });
+    root.append(el("div", { className: "cred" }, [lead, meta, btn]));
   }
 }
 

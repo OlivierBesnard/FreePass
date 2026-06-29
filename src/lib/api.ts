@@ -34,6 +34,7 @@ export interface EntryDetail {
   username: string | null;
   password: string | null;
   notes: string | null;
+  icon: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -90,6 +91,17 @@ export const api = {
 
   importEntries: (envId: string, entries: EntryInput[]): Promise<number> =>
     invoke("import_entries", { envId, entries }),
+
+  /** Fetch + store the site favicon for an entry (best-effort, direct-to-site). */
+  refreshEntryIcon: (
+    envId: string,
+    entryId: string,
+    url: string,
+  ): Promise<string | null> =>
+    invoke("refresh_entry_icon", { envId, entryId, url }),
+  /** All stored favicons for the environment, keyed by entry id. */
+  entryIcons: (envId: string): Promise<Record<string, string>> =>
+    invoke("entry_icons", { envId }),
 
   generatePassword: (opts: GeneratorOptions): Promise<string> =>
     invoke("generate_password", { ...opts }),

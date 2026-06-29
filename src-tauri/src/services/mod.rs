@@ -2,6 +2,7 @@
 //! stay thin and delegate here.
 
 pub mod entries;
+pub mod favicon;
 pub mod generator;
 pub mod local_channel;
 pub mod vault;

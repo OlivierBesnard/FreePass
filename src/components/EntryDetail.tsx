@@ -30,6 +30,13 @@ export function EntryDetailView({
         <p className="text-sm text-ink-500">Déchiffrement…</p>
       ) : (
         <div className="space-y-4">
+          {entry.icon && (
+            <div className="flex justify-center">
+              <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-cream-400 bg-card">
+                <img src={entry.icon} alt="" className="h-7 w-7 object-contain" />
+              </span>
+            </div>
+          )}
           {entry.url && (
             <Row label="Site web">
               <button

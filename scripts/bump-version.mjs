@@ -22,6 +22,8 @@ function patch(path, re, replacement) {
 patch("package.json", /("version":\s*")[^"]+(")/, `$1${version}$2`);
 patch("src-tauri/tauri.conf.json", /("version":\s*")[^"]+(")/, `$1${version}$2`);
 patch("src-tauri/Cargo.toml", /^version = "[^"]+"/m, `version = "${version}"`);
+// Keep the extension manifest in lockstep so users can tell which build they run.
+patch("extension/manifest.json", /("version":\s*")[^"]+(")/, `$1${version}$2`);
 
 console.log(`\nVersion → ${version}. Pour publier :`);
 console.log(`  git commit -am "release: v${version}"`);

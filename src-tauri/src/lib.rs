@@ -11,8 +11,9 @@ use tauri::Manager;
 use crate::commands::db::db_health_check;
 use crate::commands::generator::generate_password;
 use crate::commands::entries::{
-    archive_entry, create_entry, default_environment, delete_entry, get_entry, import_entries,
-    list_archived_entries, list_entries, restore_entry, update_entry,
+    archive_entry, create_entry, default_environment, delete_entry, entry_icons, get_entry,
+    import_entries, list_archived_entries, list_entries, refresh_entry_icon, restore_entry,
+    update_entry,
 };
 use crate::commands::vault::{
     change_master_password, create_vault, local_channel_info, lock, unlock, vault_status,
@@ -38,7 +39,23 @@ pub fn run() {
             let app_data_dir_for_state = app_data_dir.clone();
             tauri::async_runtime::block_on(async move {
                 let pool = init_pool(&app_data_dir).await?;
-                handle.manage(AppState::new(pool, app_data_dir_for_state));
+                let state = AppState::new(pool, app_data_dir_for_state);
+                // Start the loopback channel up-front when a vault already exists,
+                // so the extension can always discover the app — even at the lock
+                // screen. Credentials stay gated on unlock; `/health` only reveals
+                // the lock state to extension origins (THREAT F7/F14). Best-effort:
+                // a bind failure must not prevent the app from starting.
+                if crate::services::vault::is_initialized(&state.pool).await? {
+                    if let Ok(channel) =
+                        crate::services::local_channel::start(state.pool.clone(), state.session.clone())
+                            .await
+                    {
+                        if let Ok(mut guard) = state.channel.lock() {
+                            *guard = Some(channel);
+                        }
+                    }
+                }
+                handle.manage(state);
                 Ok::<(), crate::error::AppError>(())
             })
             .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
@@ -63,6 +80,8 @@ pub fn run() {
             restore_entry,
             delete_entry,
             import_entries,
+            refresh_entry_icon,
+            entry_icons,
             generate_password,
         ])
         .run(tauri::generate_context!())

@@ -1,6 +1,6 @@
 [package]
 name = "freepass"
-version = "0.1.3"
+version = "0.1.4"
 description = "Local-first, mono-user password manager"
 authors = ["Olivier Besnard"]
 edition = "2021"
@@ -30,6 +30,12 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "io-util"] }
 # Local loopback control channel for the browser extension (Phase 6).
 axum = "0.8"
+# HTTP client used ONLY to fetch a site's own favicon directly (no third-party
+# favicon service — that would leak the user's saved domains). rustls (pure-Rust
+# TLS), no OpenSSL/C. This is transport, not vault crypto: RustCrypto stays the
+# sole vault crypto (CRYPTO_SPEC). `base64` encodes the icon as a data: URL.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+base64 = "0.22"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"

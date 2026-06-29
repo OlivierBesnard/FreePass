@@ -35,6 +35,9 @@ pub struct EntryDetail {
     pub username: Option<String>,
     pub password: Option<String>,
     pub notes: Option<String>,
+    /// Site favicon as a `data:` URL, fetched best-effort and stored encrypted
+    /// like any other field. `None` if never fetched or not found.
+    pub icon: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

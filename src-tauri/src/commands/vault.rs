@@ -33,21 +33,21 @@ fn channel_unavailable() -> AppError {
     AppError::Other("canal local indisponible".into())
 }
 
-/// (Re)start the loopback channel for the current session.
-async fn start_channel(state: &AppState) -> AppResult<()> {
-    if let Some(handle) = state.channel.lock().map_err(|_| channel_unavailable())?.take() {
-        handle.stop();
+/// Ensure the loopback channel is running, starting it once if needed. The
+/// channel reads the live session state through its `Arc`, so it never has to
+/// be restarted on lock/unlock — it simply serves `/credentials` only while the
+/// vault is unlocked. Keeping it always-on means the extension can discover the
+/// app at any time (even at the lock screen), which is the whole point of a
+/// fixed loopback port. Idempotent: a no-op if a handle already exists.
+pub async fn ensure_channel(state: &AppState) -> AppResult<()> {
+    {
+        let guard = state.channel.lock().map_err(|_| channel_unavailable())?;
+        if guard.is_some() {
+            return Ok(());
+        }
     }
     let handle = local_channel::start(state.pool.clone(), state.session.clone()).await?;
     *state.channel.lock().map_err(|_| channel_unavailable())? = Some(handle);
-    Ok(())
-}
-
-/// Stop the loopback channel (server shuts down, port closes).
-fn stop_channel(state: &AppState) -> AppResult<()> {
-    if let Some(handle) = state.channel.lock().map_err(|_| channel_unavailable())?.take() {
-        handle.stop();
-    }
     Ok(())
 }
 
@@ -74,7 +74,7 @@ pub async fn create_vault(
         .lock()
         .map_err(|_| session_unavailable())?
         .unlock(vault_key);
-    start_channel(&state).await?;
+    ensure_channel(&state).await?;
     Ok(())
 }
 
@@ -89,14 +89,15 @@ pub async fn unlock(state: State<'_, AppState>, master_password: String) -> AppR
         .lock()
         .map_err(|_| session_unavailable())?
         .unlock(vault_key);
-    start_channel(&state).await?;
+    ensure_channel(&state).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn lock(state: State<'_, AppState>) -> AppResult<()> {
-    // Stop the channel first so it can never serve a locked vault.
-    stop_channel(&state)?;
+    // The channel stays up on lock; it serves `/credentials` only while the
+    // vault is unlocked (it checks the live session), so a locked vault leaks
+    // nothing — and the extension can still discover the app to show its state.
     state
         .session
         .lock()

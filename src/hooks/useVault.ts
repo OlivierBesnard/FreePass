@@ -32,17 +32,48 @@ export function useEntry(envId: string | undefined, entryId: string | null) {
   });
 }
 
+/** Stored favicons for the environment, keyed by entry id (list overlay). */
+export function useEntryIcons(envId: string | undefined) {
+  return useQuery({
+    queryKey: ["entryIcons", envId],
+    queryFn: () => api.entryIcons(envId as string),
+    enabled: !!envId,
+  });
+}
+
+/**
+ * Fetch + store an entry's favicon in the background, then refresh the icon
+ * caches. Best-effort: a failure is silent (the icon is purely cosmetic).
+ */
+function refreshIcon(
+  qc: ReturnType<typeof useQueryClient>,
+  envId: string,
+  entryId: string,
+  url: string | null,
+) {
+  if (!url) return;
+  void api
+    .refreshEntryIcon(envId, entryId, url)
+    .then(() => {
+      void qc.invalidateQueries({ queryKey: ["entryIcons", envId] });
+      void qc.invalidateQueries({ queryKey: ["entry", envId, entryId] });
+    })
+    .catch(() => {});
+}
+
 function useEntryInvalidation() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: ["entries"] });
 }
 
 export function useCreateEntry(envId: string | undefined) {
-  const invalidate = useEntryInvalidation();
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: EntryInput) => api.createEntry(envId as string, input),
-    onSuccess: () => {
-      void invalidate();
+    onSuccess: (newId, input) => {
+      void qc.invalidateQueries({ queryKey: ["entries"] });
+      // Grab the site favicon in the background (direct-to-site, encrypted).
+      refreshIcon(qc, envId as string, newId, input.url);
       toast.success("Identifiant ajouté.");
     },
     onError: (e) => toast.error(errorMessage(e)),
@@ -57,6 +88,8 @@ export function useUpdateEntry(envId: string | undefined) {
     onSuccess: (_data, args) => {
       void qc.invalidateQueries({ queryKey: ["entries"] });
       void qc.invalidateQueries({ queryKey: ["entry", envId, args.entryId] });
+      // Refresh the favicon in case the URL changed.
+      refreshIcon(qc, envId as string, args.entryId, args.input.url);
       toast.success("Identifiant mis à jour.");
     },
     onError: (e) => toast.error(errorMessage(e)),
