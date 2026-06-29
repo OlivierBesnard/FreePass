@@ -269,7 +269,11 @@ fn json_response(status: StatusCode, allow_origin: Option<&str>, body: String) -
         .header("content-type", "application/json")
         .header("vary", "Origin");
     if let Some(origin) = allow_origin {
-        builder = builder.header("access-control-allow-origin", origin);
+        builder = builder
+            .header("access-control-allow-origin", origin)
+            // Chrome's Private Network Access: an extension talking to 127.0.0.1
+            // is blocked unless this header is granted.
+            .header("access-control-allow-private-network", "true");
     }
     builder.body(Body::from(body)).unwrap_or_else(|_| {
         Response::builder()
@@ -292,6 +296,8 @@ async fn preflight(headers: HeaderMap) -> Response {
         .header("access-control-allow-origin", origin.unwrap())
         .header("access-control-allow-methods", "POST, GET, OPTIONS")
         .header("access-control-allow-headers", "authorization, content-type")
+        // Grant Private Network Access so Chrome lets the extension reach 127.0.0.1.
+        .header("access-control-allow-private-network", "true")
         .header("vary", "Origin")
         .body(Body::empty())
         .unwrap()
@@ -467,8 +473,8 @@ mod tests {
             .and_then(|l| l.split(' ').nth(1))
             .and_then(|s| s.parse().ok())
             .unwrap();
-        let body = resp.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-        (status, body)
+        // Return the full response (headers + body) so tests can assert headers.
+        (status, resp)
     }
 
     #[tokio::test]
@@ -527,6 +533,30 @@ mod tests {
         .await;
         assert_eq!(s, 200);
         assert!(body.contains("hunter2"), "expected credential, got: {body}");
+
+        // /health is reachable by the extension (used to discover the port).
+        let (s, body) = http(port, "GET", "/health", &[("Origin", ext_origin)], "").await;
+        assert_eq!(s, 200);
+        assert!(body.contains("unlocked"));
+
+        // Preflight must grant Private Network Access (Chrome blocks an
+        // extension -> 127.0.0.1 request otherwise).
+        let (s, body) = http(
+            port,
+            "OPTIONS",
+            "/credentials",
+            &[
+                ("Origin", ext_origin),
+                ("Access-Control-Request-Private-Network", "true"),
+            ],
+            "",
+        )
+        .await;
+        assert_eq!(s, 204);
+        assert!(
+            body.to_lowercase().contains("access-control-allow-private-network"),
+            "preflight must grant private network access"
+        );
 
         handle.stop();
     }
