@@ -24,15 +24,15 @@ loopback (`127.0.0.1`) exposé par l'application de bureau.
 1. `about:debugging#/runtime/this-firefox` → **Charger un module temporaire**.
 2. Sélectionnez `extension/manifest.json`.
 
-## Appairage
+## Appairage (une seule fois)
 1. Ouvrez FreePass, **déverrouillez** le coffre.
-2. Cliquez sur l'icône **puzzle « Connecter l'extension »** → copiez le **port** et
-   le **token**.
-3. Ouvrez le popup de l'extension → collez port + token → **Appairer**.
+2. Cliquez sur l'icône **puzzle « Connecter l'extension »** → copiez le **token**.
+3. Ouvrez le popup de l'extension → collez le token → **Appairer**.
 4. Sur un site, le popup liste les identifiants correspondants → **Remplir**.
 
-> Le token change à chaque déverrouillage : ré-appairez si l'extension affiche
-> « token invalide ».
+> Le **port est détecté automatiquement** (l'app écoute sur un port fixe) et le
+> **token reste valable après redémarrage** : vous n'appairez qu'une fois. Ré-appairez
+> seulement si l'extension affiche « token invalide ».
 
 ## À venir (Phase 9)
 - Icônes (reprise de l'icône de l'application).

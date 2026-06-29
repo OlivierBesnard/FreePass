@@ -5,7 +5,10 @@ import { api, type ChannelInfo } from "../lib/api";
 import { openExternal } from "../lib/openExternal";
 import { Modal } from "./Modal";
 
-const EXTENSION_URL = "https://github.com/OlivierBesnard/FreePass/tree/main/extension";
+const EXTENSION_ZIP =
+  "https://github.com/OlivierBesnard/FreePass/releases/latest/download/freepass-extension.zip";
+const EXTENSION_GUIDE =
+  "https://github.com/OlivierBesnard/FreePass/tree/main/extension";
 
 async function copy(value: string, label: string) {
   try {
@@ -39,23 +42,30 @@ export function ExtensionPairing({ onClose }: { onClose: () => void }) {
         </div>
 
         <ol className="space-y-3">
-          <Step n={1} title="Installer l'extension dans votre navigateur">
+          <Step n={1} title="Télécharger puis installer l'extension">
             <button
-              onClick={() => openExternal(EXTENSION_URL)}
+              onClick={() => openExternal(EXTENSION_ZIP)}
               className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-brand-500 px-3 text-xs font-medium text-white transition-colors hover:bg-brand-600"
             >
-              <Download size={14} /> Obtenir l'extension
+              <Download size={14} /> Télécharger l'extension (.zip)
             </button>
             <p className="mt-1.5 text-xs text-ink-400">
-              Chrome/Edge : <span className="font-mono">chrome://extensions</span> →
-              mode développeur → « Charger l'extension non empaquetée » → dossier{" "}
-              <span className="font-mono">extension/</span>. Firefox :{" "}
+              Décompressez le zip, puis Chrome/Edge :{" "}
+              <span className="font-mono">chrome://extensions</span> → mode
+              développeur → « Charger l'extension non empaquetée » → le dossier
+              décompressé. Firefox :{" "}
               <span className="font-mono">about:debugging</span> → « Charger un
-              module temporaire ». (Le lien ouvre le guide complet.)
+              module temporaire ».{" "}
+              <button
+                onClick={() => openExternal(EXTENSION_GUIDE)}
+                className="text-brand-700 hover:underline"
+              >
+                Guide complet
+              </button>
             </p>
           </Step>
 
-          <Step n={2} title="Coller ces valeurs dans le popup de l'extension">
+          <Step n={2} title="Coller le token dans le popup de l'extension">
             {info === undefined && (
               <p className="text-sm text-ink-500">Chargement…</p>
             )}
@@ -65,10 +75,13 @@ export function ExtensionPairing({ onClose }: { onClose: () => void }) {
               </p>
             )}
             {info && (
-              <div className="space-y-2">
-                <PairRow label="Port" value={String(info.port)} />
+              <>
                 <PairRow label="Token d'appairage" value={info.token} mono />
-              </div>
+                <p className="mt-1.5 text-xs text-ink-400">
+                  Le port est détecté automatiquement par l'extension — rien
+                  d'autre à saisir.
+                </p>
+              </>
             )}
           </Step>
 
@@ -83,7 +96,8 @@ export function ExtensionPairing({ onClose }: { onClose: () => void }) {
         <p className="text-xs text-ink-400">
           Le token est une <strong>clé d'accès au canal</strong>, pas votre mot de
           passe maître : il ne déverrouille pas le coffre, ne sort jamais de la
-          machine, et change à chaque déverrouillage (ré-appairez si besoin).
+          machine, et <strong>reste valable d'un redémarrage à l'autre</strong> —
+          l'appairage ne se fait qu'une seule fois.
         </p>
       </div>
     </Modal>

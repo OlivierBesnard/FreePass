@@ -24,7 +24,7 @@ use axum::Router;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
@@ -39,6 +39,12 @@ const EXTENSION_SCHEMES: [&str; 3] = [
     "moz-extension://",
     "safari-web-extension://",
 ];
+
+/// Fixed loopback ports the channel tries to bind, in order. Fixed (not
+/// ephemeral) so the extension can auto-discover the app after a restart
+/// without the user re-entering a port. Falls back to an ephemeral port only
+/// if all are busy.
+pub const CANDIDATE_PORTS: [u16; 3] = [48100, 48101, 48102];
 
 /// Minimal set of multi-label public suffixes so `foo.co.uk` ≠ `bar.co.uk`.
 /// A full Public Suffix List is a Phase 8 hardening item; this covers the
@@ -99,15 +105,48 @@ fn random_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Start the channel on an ephemeral loopback port. Spawned on the Tauri tokio
-/// runtime; shuts down gracefully when the handle is dropped/stopped.
+/// Load the persisted pairing token, generating + storing one on first use so
+/// it stays stable across restarts (the extension pairs once). The token is a
+/// capability, not a vault secret (THREAT F14).
+pub async fn get_or_create_token(pool: &SqlitePool) -> AppResult<String> {
+    let existing: Option<String> = sqlx::query("SELECT channel_token FROM vault WHERE id = 1")
+        .fetch_one(pool)
+        .await?
+        .get("channel_token");
+    if let Some(token) = existing {
+        if !token.is_empty() {
+            return Ok(token);
+        }
+    }
+    let token = random_token();
+    sqlx::query("UPDATE vault SET channel_token = ? WHERE id = 1")
+        .bind(&token)
+        .execute(pool)
+        .await?;
+    Ok(token)
+}
+
+/// Bind the first available fixed candidate port; fall back to an ephemeral one.
+async fn bind_loopback() -> AppResult<(TcpListener, u16)> {
+    for &port in CANDIDATE_PORTS.iter() {
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)).await {
+            return Ok((listener, port));
+        }
+    }
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    Ok((listener, port))
+}
+
+/// Start the channel on a fixed loopback port with the persistent pairing token.
+/// Spawned on the Tauri tokio runtime; shuts down gracefully when the handle is
+/// dropped/stopped.
 pub async fn start(
     pool: SqlitePool,
     session: Arc<Mutex<VaultSession>>,
 ) -> AppResult<ChannelHandle> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let port = listener.local_addr()?.port();
-    let token = random_token();
+    let token = get_or_create_token(&pool).await?;
+    let (listener, port) = bind_loopback().await?;
 
     let state = ChannelState {
         pool,
@@ -390,6 +429,16 @@ mod tests {
             credentials_for_origin(&pool, &session, "https://github.com").await,
             Err(AppError::VaultLocked)
         ));
+    }
+
+    #[tokio::test]
+    async fn pairing_token_is_persistent_across_calls() {
+        let pool = init_pool_with_url("sqlite::memory:").await.unwrap();
+        vault::create_vault(&pool, b"pw").await.unwrap();
+        let t1 = get_or_create_token(&pool).await.unwrap();
+        let t2 = get_or_create_token(&pool).await.unwrap();
+        assert_eq!(t1, t2, "token must be stable across restarts");
+        assert!(t1.len() >= 32);
     }
 
     // Minimal raw HTTP/1.1 client for the live-socket test.

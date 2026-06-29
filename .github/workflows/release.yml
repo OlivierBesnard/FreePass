@@ -47,3 +47,13 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+
+      - name: Package the browser extension
+        shell: pwsh
+        run: Compress-Archive -Path extension/* -DestinationPath freepass-extension.zip -Force
+
+      - name: Attach the extension to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} freepass-extension.zip --clobber
