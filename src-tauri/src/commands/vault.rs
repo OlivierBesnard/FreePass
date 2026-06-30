@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::services::{local_channel, vault};
+use crate::services::{local_channel, projects, vault};
 use crate::state::AppState;
 
 /// What the UI needs to pick a screen: create vault / unlock / show vault.
@@ -69,6 +69,9 @@ pub async fn create_vault(
 ) -> AppResult<()> {
     let vault_key = vault::create_vault(&state.pool, master_password.as_bytes()).await?;
     vault::zeroize_password(master_password);
+    // Attach the freshly created default environment to a default "Personnel"
+    // project (Phase 10). Idempotent and crypto-free — pure clear metadata.
+    projects::backfill_default_project(&state.pool).await?;
     state
         .session
         .lock()

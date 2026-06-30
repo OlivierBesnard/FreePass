@@ -96,6 +96,35 @@ export function useUpdateEntry(envId: string | undefined) {
   });
 }
 
+/**
+ * Duplicate an entry into another environment of the same project. We read the
+ * decrypted source entry, then create a fresh copy under the target env's own
+ * envKey (no cross-env re-encryption: the new entry is sealed independently).
+ */
+export function useDuplicateEntryToEnvironment(sourceEnvId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { entryId: string; targetEnvId: string }) => {
+      const detail = await api.getEntry(sourceEnvId as string, args.entryId);
+      const input: EntryInput = {
+        title: detail.title,
+        url: detail.url,
+        username: detail.username,
+        password: detail.password,
+        notes: detail.notes,
+      };
+      const newId = await api.createEntry(args.targetEnvId, input);
+      return { newId, targetEnvId: args.targetEnvId, url: detail.url };
+    },
+    onSuccess: ({ newId, targetEnvId, url }) => {
+      void qc.invalidateQueries({ queryKey: ["entries"] });
+      refreshIcon(qc, targetEnvId, newId, url);
+      toast.success("Identifiant dupliqué dans l'environnement.");
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+}
+
 export function useImportEntries(envId: string | undefined) {
   const invalidate = useEntryInvalidation();
   return useMutation({

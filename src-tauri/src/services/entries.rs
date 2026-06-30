@@ -684,4 +684,182 @@ mod tests {
             Err(AppError::NotFound)
         ));
     }
+
+    // === Phase 10: isolation between environments (adversarial) ===
+
+    use crate::services::{environments, projects};
+
+    /// Two live environments under one project, each with its own envKey.
+    /// Returns (pool, vaultKey, (env_a_id, env_a_key), (env_b_id, env_b_key)).
+    async fn two_envs() -> (
+        SqlitePool,
+        SecretKey,
+        (String, SecretKey),
+        (String, SecretKey),
+    ) {
+        let pool = init_pool_with_url("sqlite::memory:").await.unwrap();
+        let vk = vault::create_vault(&pool, b"pw").await.unwrap();
+        projects::backfill_default_project(&pool).await.unwrap();
+        let project = projects::list_projects(&pool).await.unwrap()[0].id.clone();
+        // env A is the default environment; env B is a freshly minted one.
+        let env_a_id = vault::default_environment_id(&pool).await.unwrap();
+        let env_a_key = vault::load_env_key(&pool, &vk, &env_a_id).await.unwrap();
+        let env_b = environments::create_environment(&pool, &vk, &project, "Prod")
+            .await
+            .unwrap();
+        let env_b_key = vault::load_env_key(&pool, &vk, &env_b.id).await.unwrap();
+        (pool, vk, (env_a_id, env_a_key), (env_b.id, env_b_key))
+    }
+
+    #[tokio::test]
+    async fn list_entries_is_scoped_to_its_environment() {
+        // An entry created in env A must NOT appear when listing env B.
+        let (pool, _vk, (env_a, key_a), (env_b, _key_b)) = two_envs().await;
+        create_entry(&pool, &key_a, &env_a, &login("OnlyInA", Some("a.com"), "u", "p"))
+            .await
+            .unwrap();
+
+        let in_a = list_entries(&pool, &env_a, None).await.unwrap();
+        assert_eq!(in_a.len(), 1, "the entry must be visible in its own env");
+
+        let in_b = list_entries(&pool, &env_b, None).await.unwrap();
+        assert!(in_b.is_empty(), "env B must not see env A's entry (isolation)");
+
+        // Search in env B must not surface env A's entry either.
+        let search_b = list_entries(&pool, &env_b, Some("OnlyInA")).await.unwrap();
+        assert!(search_b.is_empty(), "scoped search must not cross environments");
+    }
+
+    #[tokio::test]
+    async fn get_entry_with_the_wrong_env_id_is_not_found() {
+        // get_entry filters by env_id in the WHERE clause: querying env B for an
+        // entry that lives in env A must be NotFound (not a decrypt error / leak).
+        let (pool, _vk, (env_a, key_a), (env_b, key_b)) = two_envs().await;
+        let id = create_entry(&pool, &key_a, &env_a, &login("Secret", Some("a.com"), "u", "p"))
+            .await
+            .unwrap();
+
+        // Correct env id + key => fine.
+        get_entry(&pool, &key_a, &env_a, &id).await.unwrap();
+        // Wrong env id (even with env B's own key) => NotFound, never a partial read.
+        assert!(matches!(
+            get_entry(&pool, &key_b, &env_b, &id).await,
+            Err(AppError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn entry_does_not_decrypt_under_another_environments_key() {
+        // F8 at the entry level, end-to-end through the service layer: env A's
+        // ciphertext must NOT decrypt under env B's envKey. We bypass get_entry's
+        // env_id WHERE filter by reading the raw field and decrypting with the
+        // WRONG key/env to prove the AEAD (not just the SQL filter) rejects it.
+        let (pool, _vk, (env_a, key_a), (env_b, key_b)) = two_envs().await;
+        let id = create_entry(&pool, &key_a, &env_a, &login("X", Some("a.com"), "u", "topsecret"))
+            .await
+            .unwrap();
+
+        let f = sqlx::query(
+            "SELECT nonce, ciphertext FROM entry_fields WHERE entry_id = ? AND field_name = 'password'",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let sealed = Sealed {
+            nonce: nonce_from(f.get("nonce")).unwrap(),
+            ciphertext: f.get("ciphertext"),
+        };
+
+        // Correct env key + env id => decrypts.
+        let ok = crypto::decrypt_field(&key_a, &env_a, &id, "password", &sealed);
+        assert_eq!(&ok.unwrap()[..], b"topsecret");
+
+        // Env B's key (different key) => MAC failure, no plaintext.
+        assert!(
+            crypto::decrypt_field(&key_b, &env_a, &id, "password", &sealed).is_err(),
+            "env B's key must not decrypt env A's field (F8 / key isolation)"
+        );
+        // Even env A's key but B's env_id in the AAD => MAC failure (anti cross-env swap).
+        assert!(
+            crypto::decrypt_field(&key_a, &env_b, &id, "password", &sealed).is_err(),
+            "field bound to env A's id must not open under env B's id (F8 AAD)"
+        );
+    }
+
+    #[tokio::test]
+    async fn icons_loader_is_scoped_to_its_environment() {
+        // load_icons joins on entries.env_id; an icon stored in env A must not be
+        // returned when loading env B's icons.
+        let (pool, _vk, (env_a, key_a), (env_b, key_b)) = two_envs().await;
+        let id = create_entry(&pool, &key_a, &env_a, &login("WithIcon", Some("a.com"), "u", "p"))
+            .await
+            .unwrap();
+        set_icon(&pool, &key_a, &env_a, &id, Some("data:image/png;base64,ZZZZ"))
+            .await
+            .unwrap();
+
+        assert_eq!(load_icons(&pool, &key_a, &env_a).await.unwrap().len(), 1);
+        assert!(
+            load_icons(&pool, &key_b, &env_b).await.unwrap().is_empty(),
+            "env B must not load env A's icons"
+        );
+    }
+
+    #[tokio::test]
+    async fn mutations_cannot_target_an_entry_through_the_wrong_environment() {
+        // An attacker (or a bug) passing entry A's id but env B's id must not be
+        // able to update / archive / delete / set-icon that entry across the env
+        // boundary. Every mutation filters by env_id.
+        let (pool, _vk, (env_a, key_a), (env_b, key_b)) = two_envs().await;
+        let id = create_entry(&pool, &key_a, &env_a, &login("X", Some("a.com"), "u", "p"))
+            .await
+            .unwrap();
+
+        // update via wrong env => NotFound, and the entry is left intact.
+        assert!(matches!(
+            update_entry(&pool, &key_b, &env_b, &id, &login("hijacked", None, "z", "z")).await,
+            Err(AppError::NotFound)
+        ));
+        assert_eq!(
+            get_entry(&pool, &key_a, &env_a, &id).await.unwrap().title,
+            "X",
+            "cross-env update must not have mutated the entry"
+        );
+
+        // archive / restore / delete / set_icon via wrong env => refused.
+        assert!(matches!(
+            archive_entry(&pool, &env_b, &id).await,
+            Err(AppError::NotFound)
+        ));
+        assert!(matches!(
+            set_icon(&pool, &key_b, &env_b, &id, Some("data:image/png;base64,QQ")).await,
+            Err(AppError::NotFound)
+        ));
+        // Entry is still live and listable only in env A.
+        assert_eq!(list_entries(&pool, &env_a, None).await.unwrap().len(), 1);
+        assert_eq!(list_entries(&pool, &env_b, None).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn same_id_in_two_envs_each_decrypts_under_its_own_key() {
+        // Defensive: even if (improbably) the same title/url exist in both envs,
+        // each entry's secret is independent and only opens under its own envKey.
+        let (pool, _vk, (env_a, key_a), (env_b, key_b)) = two_envs().await;
+        let id_a = create_entry(&pool, &key_a, &env_a, &login("Dup", Some("dup.com"), "ua", "pa"))
+            .await
+            .unwrap();
+        let id_b = create_entry(&pool, &key_b, &env_b, &login("Dup", Some("dup.com"), "ub", "pb"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_entry(&pool, &key_a, &env_a, &id_a).await.unwrap().password.as_deref(),
+            Some("pa")
+        );
+        assert_eq!(
+            get_entry(&pool, &key_b, &env_b, &id_b).await.unwrap().password.as_deref(),
+            Some("pb")
+        );
+    }
 }

@@ -71,6 +71,36 @@ fn migrations_do_not_reference_multi_user_columns() {
     );
 }
 
+/// Phase 10 guard: prove the scan actually reaches the new `004_projects.sql`
+/// migration (so a future principal column there could not slip through), and
+/// that `project_id` — an OBJECT identifier, not a principal — is not flagged.
+#[test]
+fn migration_004_projects_is_scanned_and_clean() {
+    let migrations_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let path = migrations_dir.join("004_projects.sql");
+    assert!(
+        path.exists(),
+        "expected the Phase 10 migration at {}",
+        path.display()
+    );
+
+    let content = fs::read_to_string(&path).expect("read 004_projects.sql");
+    let lowered = strip_sql_comments(&content).to_lowercase();
+
+    // It really does add `project_id` (object id) — and the guard does NOT flag
+    // it (the forbidden list is principal identifiers only).
+    assert!(
+        contains_identifier(&lowered, "project_id"),
+        "004 should add the project_id column"
+    );
+    for forbidden in FORBIDDEN_IDENTIFIERS {
+        assert!(
+            !contains_identifier(&lowered, forbidden),
+            "004_projects.sql leaked a forbidden principal identifier `{forbidden}`"
+        );
+    }
+}
+
 /// True iff `needle` appears in `haystack` as a standalone identifier
 /// (not surrounded by `[a-z0-9_]`). `haystack` must already be lowercased.
 fn contains_identifier(haystack: &str, needle: &str) -> bool {

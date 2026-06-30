@@ -15,6 +15,12 @@ use crate::commands::entries::{
     import_entries, list_archived_entries, list_entries, refresh_entry_icon, restore_entry,
     update_entry,
 };
+use crate::commands::environments::{
+    archive_environment, create_environment, list_environments, rename_environment,
+};
+use crate::commands::projects::{
+    archive_project, create_project, list_projects, rename_project,
+};
 use crate::commands::vault::{
     change_master_password, create_vault, local_channel_info, lock, unlock, vault_status,
 };
@@ -46,6 +52,10 @@ pub fn run() {
                 // the lock state to extension origins (THREAT F7/F14). Best-effort:
                 // a bind failure must not prevent the app from starting.
                 if crate::services::vault::is_initialized(&state.pool).await? {
+                    // Phase 10: ensure the default "Personnel" project exists and
+                    // every orphan environment is attached to it. Idempotent and
+                    // crypto-free; runs on every startup of an existing vault.
+                    crate::services::projects::backfill_default_project(&state.pool).await?;
                     if let Ok(channel) =
                         crate::services::local_channel::start(state.pool.clone(), state.session.clone())
                             .await
@@ -83,6 +93,14 @@ pub fn run() {
             refresh_entry_icon,
             entry_icons,
             generate_password,
+            create_project,
+            list_projects,
+            rename_project,
+            archive_project,
+            create_environment,
+            list_environments,
+            rename_environment,
+            archive_environment,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

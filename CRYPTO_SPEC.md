@@ -148,7 +148,7 @@ Ils vivent dans `src-tauri/.../crypto/` (tests) et/ou `vectors/v1/`.
 > potentiellement **non-supervisé** (sans mot de passe maître). Elle n'est **pas** implémentée en v1
 > et **n'est pas figée** ; seule l'**indirection `envKey` de §3 est adoptée dès v1** pour la rendre
 > additive. À re-spécifier (et re-figer) au moment de l'implémentation. Voir DESIGN §10, THREAT F16–F20,
-> PLAN Phase 10.
+> PLAN Phase 11.
 
 ### Principe : un second emballage de `envKey`
 Donner à un agent l'accès à l'environnement `e` = créer une **clé d'accès** et **emballer la même

@@ -4,11 +4,13 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One environment, identified for scoping CRUD calls.
+/// One environment, identified for scoping CRUD calls. `project_id` is the
+/// owning project (nullable only during the Phase 10 startup backfill).
 #[derive(Debug, Serialize)]
 pub struct EnvironmentInfo {
     pub id: String,
     pub name: String,
+    pub project_id: Option<String>,
 }
 
 /// List-view row: clear metadata only, no secret material.

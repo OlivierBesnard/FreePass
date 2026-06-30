@@ -243,8 +243,11 @@ fn domains_match(page_origin: &str, entry_url: &str) -> bool {
     !page.is_empty() && page == entry
 }
 
-/// Collect decrypted credentials whose stored URL matches `page_origin`. Errors
-/// (with `VaultLocked`) if the vault is not unlocked.
+/// Collect decrypted credentials whose stored URL matches `page_origin`, across
+/// ALL non-archived environments (Phase 10: multi-env autofill, criterion #7).
+/// Errors (with `VaultLocked`) if the vault is not unlocked (F7). The strict
+/// registrable-domain match (F6) is unchanged — only the set of environments
+/// scanned widened from the single default env to every live env.
 pub async fn credentials_for_origin(
     pool: &SqlitePool,
     session: &Arc<Mutex<VaultSession>>,
@@ -260,22 +263,39 @@ pub async fn credentials_for_origin(
         s.vault_key().ok_or(AppError::VaultLocked)?.clone()
     };
 
-    let env_id = vault::default_environment_id(pool).await?;
-    let env_key = vault::load_env_key(pool, &vault_key, &env_id).await?;
-    let summaries = entries::list_entries(pool, &env_id, None).await?;
+    // Every live environment. Archived == not served — and archiving the owning
+    // PROJECT also takes its environments out of autofill, so a project "put
+    // away" in the UI is consistently inactive for the extension too (F7). A
+    // LEFT JOIN keeps envs whose project_id is still NULL (pre-backfill window).
+    let env_ids: Vec<String> = sqlx::query(
+        "SELECT e.id FROM environments e \
+         LEFT JOIN projects p ON p.id = e.project_id \
+         WHERE e.archived_at IS NULL AND (e.project_id IS NULL OR p.archived_at IS NULL)",
+    )
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| r.get::<String, _>("id"))
+    .collect();
 
     let mut out = Vec::new();
-    for summary in summaries {
-        let Some(url) = &summary.url else { continue };
-        if domains_match(page_origin, url) {
-            let detail = entries::get_entry(pool, &env_key, &env_id, &summary.id).await?;
-            out.push(Credential {
-                title: detail.title,
-                url: detail.url,
-                username: detail.username,
-                password: detail.password,
-                icon: detail.icon,
-            });
+    for env_id in env_ids {
+        // Each environment is decrypted under its OWN envKey (CRYPTO_SPEC §3); a
+        // key from one env never decrypts another (AAD-bound, F8).
+        let env_key = vault::load_env_key(pool, &vault_key, &env_id).await?;
+        let summaries = entries::list_entries(pool, &env_id, None).await?;
+        for summary in summaries {
+            let Some(url) = &summary.url else { continue };
+            if domains_match(page_origin, url) {
+                let detail = entries::get_entry(pool, &env_key, &env_id, &summary.id).await?;
+                out.push(Credential {
+                    title: detail.title,
+                    url: detail.url,
+                    username: detail.username,
+                    password: detail.password,
+                    icon: detail.icon,
+                });
+            }
         }
     }
     Ok(out)
@@ -470,6 +490,184 @@ mod tests {
             credentials_for_origin(&pool, &session, "https://github.com").await,
             Err(AppError::VaultLocked)
         ));
+    }
+
+    #[tokio::test]
+    async fn credentials_are_served_from_a_second_environment() {
+        // Phase 10 criterion #7: an entry created in a NON-default environment
+        // must be autofilled. The scan widened to all live environments.
+        use crate::services::{environments, projects};
+
+        let pool = init_pool_with_url("sqlite::memory:").await.unwrap();
+        let vk = vault::create_vault(&pool, b"pw").await.unwrap();
+        projects::backfill_default_project(&pool).await.unwrap();
+        let project = &projects::list_projects(&pool).await.unwrap()[0].id.clone();
+
+        // A fresh second environment with its own envKey.
+        let env2 = environments::create_environment(&pool, &vk, project, "Prod")
+            .await
+            .unwrap();
+        let env2_key = vault::load_env_key(&pool, &vk, &env2.id).await.unwrap();
+        entries::create_entry(
+            &pool,
+            &env2_key,
+            &env2.id,
+            &EntryInput {
+                title: "GitLab".into(),
+                url: Some("gitlab.com".into()),
+                username: Some("bob".into()),
+                password: Some("s3cr3t".into()),
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let session = Arc::new(Mutex::new(VaultSession::default()));
+        session.lock().unwrap().unlock(vk);
+
+        let hits = credentials_for_origin(&pool, &session, "https://gitlab.com/login")
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "second-env credential must be autofilled");
+        assert_eq!(hits[0].password.as_deref(), Some("s3cr3t"));
+
+        // Archiving that environment removes it from the scan (F7: archived = not served).
+        environments::archive_environment(&pool, &env2.id).await.unwrap();
+        let none = credentials_for_origin(&pool, &session, "https://gitlab.com/login")
+            .await
+            .unwrap();
+        assert!(none.is_empty(), "archived environment must not be served");
+    }
+
+    /// Helper: a vault with two live environments, each holding a login for the
+    /// SAME domain. Returns (pool, session, env_a_id, env_b_id).
+    async fn vault_with_two_envs_same_domain() -> (
+        SqlitePool,
+        Arc<Mutex<VaultSession>>,
+        String,
+        String,
+    ) {
+        use crate::services::{environments, projects};
+        let pool = init_pool_with_url("sqlite::memory:").await.unwrap();
+        let vk = vault::create_vault(&pool, b"pw").await.unwrap();
+        projects::backfill_default_project(&pool).await.unwrap();
+        let project = projects::list_projects(&pool).await.unwrap()[0].id.clone();
+
+        let env_a = vault::default_environment_id(&pool).await.unwrap();
+        let key_a = vault::load_env_key(&pool, &vk, &env_a).await.unwrap();
+        let env_b = environments::create_environment(&pool, &vk, &project, "Prod")
+            .await
+            .unwrap();
+        let key_b = vault::load_env_key(&pool, &vk, &env_b.id).await.unwrap();
+
+        let mk = |user: &str, pass: &str| EntryInput {
+            title: "Example".into(),
+            url: Some("example.com".into()),
+            username: Some(user.into()),
+            password: Some(pass.into()),
+            notes: None,
+        };
+        entries::create_entry(&pool, &key_a, &env_a, &mk("alice", "pw-a")).await.unwrap();
+        entries::create_entry(&pool, &key_b, &env_b.id, &mk("bob", "pw-b")).await.unwrap();
+
+        let session = Arc::new(Mutex::new(VaultSession::default()));
+        session.lock().unwrap().unlock(vk);
+        (pool, session, env_a, env_b.id)
+    }
+
+    #[tokio::test]
+    async fn autofill_aggregates_the_same_domain_across_two_environments() {
+        // Criterion #7: one domain present in TWO environments => BOTH credentials
+        // are served (the scan unions across all live environments).
+        let (pool, session, _a, _b) = vault_with_two_envs_same_domain().await;
+        let hits = credentials_for_origin(&pool, &session, "https://example.com/login")
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 2, "both environments' credentials must be served");
+        let mut passwords: Vec<_> = hits.iter().filter_map(|c| c.password.clone()).collect();
+        passwords.sort();
+        assert_eq!(passwords, vec!["pw-a", "pw-b"]);
+    }
+
+    #[tokio::test]
+    async fn autofill_returns_nothing_for_a_domain_in_no_environment() {
+        // A domain matching no entry in any environment => empty (no leak).
+        let (pool, session, _a, _b) = vault_with_two_envs_same_domain().await;
+        let none = credentials_for_origin(&pool, &session, "https://unrelated.org")
+            .await
+            .unwrap();
+        assert!(none.is_empty(), "an unknown domain must yield nothing");
+    }
+
+    #[tokio::test]
+    async fn autofill_rejects_a_typosquat_even_with_multiple_environments() {
+        // F6 across multi-env: a look-alike domain must match NEITHER environment.
+        let (pool, session, _a, _b) = vault_with_two_envs_same_domain().await;
+        let none = credentials_for_origin(&pool, &session, "https://examp1e.com/login")
+            .await
+            .unwrap();
+        assert!(none.is_empty(), "typosquat must not match any environment (F6)");
+        // A different registrable domain that merely contains the string is rejected too.
+        let none2 = credentials_for_origin(&pool, &session, "https://example.com.evil.net")
+            .await
+            .unwrap();
+        assert!(none2.is_empty(), "substring/suffix attack must not match (F6)");
+    }
+
+    #[tokio::test]
+    async fn autofill_serves_nothing_when_locked_even_with_multiple_environments() {
+        // F7: with several environments holding matching credentials, a locked
+        // vault must still serve nothing.
+        let (pool, session, _a, _b) = vault_with_two_envs_same_domain().await;
+        session.lock().unwrap().lock();
+        assert!(matches!(
+            credentials_for_origin(&pool, &session, "https://example.com/login").await,
+            Err(AppError::VaultLocked)
+        ));
+    }
+
+    #[tokio::test]
+    async fn archiving_a_project_removes_its_environments_from_autofill() {
+        // Archiving a PROJECT takes all its environments out of autofill, so a
+        // project "put away" in the UI is consistently inactive for the extension
+        // too (F7). The scan LEFT JOINs `projects` and excludes envs whose owning
+        // project is archived — without mutating/cascading the environment rows.
+        let (pool, session, _env_a, _env_b) = vault_with_two_envs_same_domain().await;
+        use crate::services::projects;
+        let project = projects::list_projects(&pool).await.unwrap()[0].id.clone();
+
+        // Both environments belong to the default project; before archiving, both
+        // credentials are served.
+        let before = credentials_for_origin(&pool, &session, "https://example.com/login")
+            .await
+            .unwrap();
+        assert_eq!(before.len(), 2);
+
+        projects::archive_project(&pool, &project).await.unwrap();
+
+        let after = credentials_for_origin(&pool, &session, "https://example.com/login")
+            .await
+            .unwrap();
+        assert!(
+            after.is_empty(),
+            "archiving the owning project must remove its envs from autofill, got {}",
+            after.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn autofill_skips_archived_env_but_still_serves_the_live_one() {
+        // Archiving ONE of two environments removes only its credential; the
+        // surviving environment's credential is still served (F7 partial).
+        let (pool, session, _env_a, env_b) = vault_with_two_envs_same_domain().await;
+        use crate::services::environments;
+        environments::archive_environment(&pool, &env_b).await.unwrap();
+        let hits = credentials_for_origin(&pool, &session, "https://example.com/login")
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "only the live environment's credential remains");
+        assert_eq!(hits[0].password.as_deref(), Some("pw-a"));
     }
 
     #[tokio::test]

@@ -184,4 +184,4 @@ l'environnement), **journal d'audit** des accès, **least privilege** (lecture s
 **serveur MCP local**, ou une **CLI** qui injecte les variables d'un environnement. Aucun secret ne
 sort de la machine sans décision figée séparée.
 
-Détail crypto : CRYPTO_SPEC §9 (non figé). Phase de réalisation : PLAN Phase 10.
+Détail crypto : CRYPTO_SPEC §9 (non figé). Phase de réalisation : PLAN Phase 11.

@@ -1,8 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import { Archive, KeyRound, LockKeyhole, Plus, Puzzle, Search, Upload } from "lucide-react";
+import {
+  Archive,
+  ArrowLeft,
+  KeyRound,
+  LockKeyhole,
+  Plus,
+  Puzzle,
+  Search,
+  Upload,
+} from "lucide-react";
 import { toast } from "sonner";
-import { api, errorMessage, type EntryDetail } from "../lib/api";
-import { useEnvironment, useEntries, useEntryIcons } from "../hooks/useVault";
+import {
+  api,
+  errorMessage,
+  type EntryDetail,
+  type ProjectInfo,
+} from "../lib/api";
+import { useEntries, useEntryIcons } from "../hooks/useVault";
+import { useEnvironments } from "../hooks/useProjects";
 import { useAutoLock } from "../hooks/useAutoLock";
 import { Button, inputClass } from "../components/ui";
 import { EntryForm } from "../components/EntryForm";
@@ -11,11 +26,38 @@ import { CommandPalette } from "../components/CommandPalette";
 import { ImportCsv } from "../components/ImportCsv";
 import { ExtensionPairing } from "../components/ExtensionPairing";
 import { ArchivedEntries } from "../components/ArchivedEntries";
+import { EnvironmentSelector } from "../components/EnvironmentSelector";
 
-/** The unlocked vault: list, search, Cmd+K, CRUD, and lock. */
-export function VaultHome({ onLock }: { onLock: () => void }) {
-  const { data: env } = useEnvironment();
-  const envId = env?.id;
+/**
+ * The unlocked vault scoped to a (project, environment) pair: environment
+ * selector, list, search, Cmd+K, CRUD, archives, icons, extension, and lock.
+ */
+export function VaultHome({
+  project,
+  onLock,
+  onBack,
+}: {
+  project: ProjectInfo;
+  onLock: () => void;
+  onBack: () => void;
+}) {
+  const projectId = project.id;
+  const { data: environments = [] } = useEnvironments(projectId);
+
+  // Selected environment: default to the first one of the project. Re-sync if
+  // the selection points to an environment that no longer exists (archived).
+  const [selectedEnvId, setSelectedEnvId] = useState<string | undefined>();
+  useEffect(() => {
+    if (environments.length === 0) {
+      setSelectedEnvId(undefined);
+      return;
+    }
+    setSelectedEnvId((cur) =>
+      cur && environments.some((e) => e.id === cur) ? cur : environments[0].id,
+    );
+  }, [environments]);
+
+  const envId = selectedEnvId;
 
   const [search, setSearch] = useState("");
   const { data: entries = [], isLoading } = useEntries(envId, search);
@@ -53,16 +95,28 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
   // up but serves no credentials while locked.
   useAutoLock(lockNow);
 
+  // A single "Personnel" environment stays out of the way: only show the
+  // selector once there is something to choose or manage beyond the default.
+  const showSelector = environments.length > 0;
+
   return (
     <main className="bg-mesh min-h-full">
       <header className="border-b border-cream-400/60 bg-card/60 backdrop-blur-sm">
         <div className="mx-auto flex max-w-3xl items-center gap-3 px-6 py-3">
-          <div className="flex items-center gap-2">
+          <button
+            onClick={onBack}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cream-400 text-ink-600 transition-colors hover:bg-cream-300"
+            title="Retour aux projets"
+            aria-label="Retour aux projets"
+          >
+            <ArrowLeft size={16} />
+          </button>
+          <div className="flex min-w-0 items-center gap-2">
             <span className="avatar-gradient flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold text-white">
               F
             </span>
-            <span className="font-serif text-base font-semibold text-ink-800">
-              FreePass
+            <span className="truncate font-serif text-base font-semibold text-ink-800">
+              {project.name}
             </span>
           </div>
 
@@ -82,12 +136,17 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
             </span>
           </div>
 
-          <Button onClick={() => setCreating(true)} className="h-9 shrink-0">
+          <Button
+            onClick={() => setCreating(true)}
+            className="h-9 shrink-0"
+            disabled={!envId}
+          >
             <Plus size={16} className="mr-1" /> Ajouter
           </Button>
           <button
             onClick={() => setImportOpen(true)}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cream-400 text-ink-600 transition-colors hover:bg-cream-300"
+            disabled={!envId}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cream-400 text-ink-600 transition-colors hover:bg-cream-300 disabled:opacity-50"
             title="Importer un CSV"
             aria-label="Importer un CSV"
           >
@@ -95,7 +154,8 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
           </button>
           <button
             onClick={() => setArchivedOpen(true)}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cream-400 text-ink-600 transition-colors hover:bg-cream-300"
+            disabled={!envId}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cream-400 text-ink-600 transition-colors hover:bg-cream-300 disabled:opacity-50"
             title="Identifiants archivés"
             aria-label="Identifiants archivés"
           >
@@ -119,10 +179,25 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
       </header>
 
       <div className="mx-auto max-w-3xl px-6 py-6">
+        {showSelector && (
+          <div className="mb-5">
+            <EnvironmentSelector
+              projectId={projectId}
+              environments={environments}
+              selectedId={selectedEnvId}
+              onSelect={setSelectedEnvId}
+            />
+          </div>
+        )}
+
         {isLoading ? (
           <p className="text-sm text-ink-500">Chargement…</p>
         ) : entries.length === 0 ? (
-          <EmptyState onAdd={() => setCreating(true)} hasSearch={search.length > 0} />
+          <EmptyState
+            onAdd={() => setCreating(true)}
+            hasSearch={search.length > 0}
+            canAdd={!!envId}
+          />
         ) : (
           <ul className="space-y-2">
             {entries.map((e) => (
@@ -158,6 +233,7 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
       {selectedId && envId && (
         <EntryDetailView
           envId={envId}
+          projectId={projectId}
           entryId={selectedId}
           onClose={() => setSelectedId(null)}
           onEdit={(entry) => {
@@ -212,9 +288,11 @@ function EntryIcon({ icon }: { icon?: string }) {
 function EmptyState({
   onAdd,
   hasSearch,
+  canAdd,
 }: {
   onAdd: () => void;
   hasSearch: boolean;
+  canAdd: boolean;
 }) {
   return (
     <div className="anim-fade-in rounded-2xl border border-dashed border-cream-500 bg-card/50 p-12 text-center">
@@ -222,9 +300,11 @@ function EmptyState({
         <KeyRound size={22} />
       </div>
       <p className="mt-3 text-sm text-ink-600">
-        {hasSearch ? "Aucun identifiant ne correspond." : "Votre coffre est vide."}
+        {hasSearch
+          ? "Aucun identifiant ne correspond."
+          : "Cet environnement est vide."}
       </p>
-      {!hasSearch && (
+      {!hasSearch && canAdd && (
         <div className="mt-4">
           <Button onClick={onAdd}>
             <Plus size={16} className="mr-1" /> Ajouter un identifiant

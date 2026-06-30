@@ -72,10 +72,6 @@ pub async fn create_vault(pool: &SqlitePool, password: &[u8]) -> AppResult<Secre
     let vault_key = SecretKey::generate();
     let wrapped_vault = crypto::wrap_vault_key(&master_key, &vault_key)?;
 
-    let env_id = Uuid::new_v4().to_string();
-    let env_key = SecretKey::generate();
-    let wrapped_env = crypto::wrap_env_key(&vault_key, &env_id, &env_key)?;
-
     let params_json =
         serde_json::to_string(&params).map_err(|e| AppError::Other(e.to_string()))?;
     let now = Utc::now().to_rfc3339();
@@ -93,21 +89,47 @@ pub async fn create_vault(pool: &SqlitePool, password: &[u8]) -> AppResult<Secre
     .bind(&now)
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "INSERT INTO environments (id, name, env_key_wrapped, env_key_nonce, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&env_id)
-    .bind(DEFAULT_ENV_NAME)
-    .bind(&wrapped_env.ciphertext)
-    .bind(&wrapped_env.nonce[..])
-    .bind(&now)
-    .bind(&now)
-    .execute(&mut *tx)
-    .await?;
+    // The default environment has no project yet (the Phase 10 startup backfill
+    // attaches it to the default project). Reuse the shared env-insert helper so
+    // there is exactly one path that generates + wraps a fresh envKey.
+    insert_environment(&mut tx, &vault_key, DEFAULT_ENV_NAME, None, &now).await?;
     tx.commit().await?;
 
     Ok(vault_key)
+}
+
+/// Generate a fresh random envKey (OsRng), seal it under `vault_key` bound to the
+/// new env id (CRYPTO_SPEC §3, anti-swap F8), and insert the environment row in
+/// the given transaction. The ONLY place that creates an environment, shared by
+/// vault init and `environments::create_environment` — zero new crypto primitive.
+/// Returns the new env id. The envKey never leaves this function in the clear.
+pub(crate) async fn insert_environment(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    vault_key: &SecretKey,
+    name: &str,
+    project_id: Option<&str>,
+    now: &str,
+) -> AppResult<String> {
+    let env_id = Uuid::new_v4().to_string();
+    let env_key = SecretKey::generate();
+    let wrapped_env = crypto::wrap_env_key(vault_key, &env_id, &env_key)?;
+
+    sqlx::query(
+        "INSERT INTO environments \
+         (id, name, env_key_wrapped, env_key_nonce, project_id, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&env_id)
+    .bind(name)
+    .bind(&wrapped_env.ciphertext)
+    .bind(&wrapped_env.nonce[..])
+    .bind(project_id)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(env_id)
 }
 
 /// Derive the master key and recover the vault key. A wrong password fails as a

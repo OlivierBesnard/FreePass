@@ -1,20 +1,31 @@
 import { useState } from "react";
-import { Copy, Eye, EyeOff, Pencil, Trash2, ExternalLink } from "lucide-react";
+import {
+  Copy,
+  CopyPlus,
+  Eye,
+  EyeOff,
+  Pencil,
+  Trash2,
+  ExternalLink,
+} from "lucide-react";
 import type { EntryDetail as Entry } from "../lib/api";
 import { useArchiveEntry, useEntry } from "../hooks/useVault";
 import { copyPlain, copySecret } from "../lib/clipboard";
 import { openExternal } from "../lib/openExternal";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DuplicateToEnvironment } from "./DuplicateToEnvironment";
 import { Modal } from "./Modal";
 
-/** Read view for one entry: reveal/copy fields, edit, or archive. */
+/** Read view for one entry: reveal/copy fields, edit, duplicate, or archive. */
 export function EntryDetailView({
   envId,
+  projectId,
   entryId,
   onClose,
   onEdit,
 }: {
   envId: string;
+  projectId: string;
   entryId: string;
   onClose: () => void;
   onEdit: (entry: Entry) => void;
@@ -23,6 +34,7 @@ export function EntryDetailView({
   const archive = useArchiveEntry(envId);
   const [reveal, setReveal] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
 
   return (
     <Modal title={entry?.title ?? "Identifiant"} onClose={onClose}>
@@ -79,12 +91,19 @@ export function EntryDetailView({
             </Row>
           )}
 
-          <div className="flex justify-end gap-2 border-t border-cream-400 pt-4">
+          <div className="flex items-center justify-end gap-2 border-t border-cream-400 pt-4">
             <button
               onClick={() => setConfirmArchive(true)}
               className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-danger-600 transition-colors hover:bg-danger-50"
             >
               <Trash2 size={15} /> Archiver
+            </button>
+            <button
+              onClick={() => setDuplicating(true)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-ink-600 transition-colors hover:bg-cream-300"
+              title="Dupliquer vers un autre environnement"
+            >
+              <CopyPlus size={15} /> Dupliquer
             </button>
             <button
               onClick={() => onEdit(entry)}
@@ -93,6 +112,17 @@ export function EntryDetailView({
               <Pencil size={15} /> Modifier
             </button>
           </div>
+
+          {duplicating && (
+            <DuplicateToEnvironment
+              projectId={projectId}
+              sourceEnvId={envId}
+              entryId={entry.id}
+              entryTitle={entry.title}
+              onClose={() => setDuplicating(false)}
+              onDone={() => setDuplicating(false)}
+            />
+          )}
 
           {confirmArchive && (
             <ConfirmDialog

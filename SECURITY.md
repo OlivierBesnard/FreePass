@@ -24,4 +24,4 @@ est traitée, avec un pointeur de code/test. ✅ implémenté · 🟡 partiel ·
 ## Limites assumées (DESIGN §3, CRYPTO_SPEC §8)
 - **A5** (root/malware sur machine **déverrouillée**) : hors périmètre — secrets en clair en mémoire une fois ouvert.
 - **Aucune récupération** du mot de passe maître : perte = perte du coffre (sauvegarde du fichier = responsabilité utilisateur).
-- **F16–F20** (accès agent IA) : non applicables tant que la Phase 10 n'est pas implémentée ; l'architecture (`envKey`) est prête.
+- **F16–F20** (accès agent IA) : non applicables tant que la Phase 11 n'est pas implémentée ; l'architecture (`envKey`) est prête.

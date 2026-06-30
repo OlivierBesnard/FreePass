@@ -48,12 +48,15 @@ async fn resolve_env_key(state: &AppState, env_id: &str) -> AppResult<SecretKey>
 #[tauri::command]
 pub async fn default_environment(state: State<'_, AppState>) -> AppResult<EnvironmentInfo> {
     let id = vault::default_environment_id(&state.pool).await?;
-    let name: String = sqlx::query("SELECT name FROM environments WHERE id = ?")
+    let row = sqlx::query("SELECT name, project_id FROM environments WHERE id = ?")
         .bind(&id)
         .fetch_one(&state.pool)
-        .await?
-        .get("name");
-    Ok(EnvironmentInfo { id, name })
+        .await?;
+    Ok(EnvironmentInfo {
+        id,
+        name: row.get("name"),
+        project_id: row.get("project_id"),
+    })
 }
 
 #[tauri::command]

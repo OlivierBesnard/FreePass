@@ -6,9 +6,17 @@ export interface VaultStatus {
   unlocked: boolean;
 }
 
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface EnvironmentInfo {
   id: string;
   name: string;
+  project_id: string | null;
 }
 
 export interface ChannelInfo {
@@ -69,6 +77,28 @@ export const api = {
 
   defaultEnvironment: (): Promise<EnvironmentInfo> =>
     invoke("default_environment"),
+
+  // Projects (Phase 10) — clear metadata grouping environments.
+  createProject: (name: string): Promise<ProjectInfo> =>
+    invoke("create_project", { name }),
+  listProjects: (): Promise<ProjectInfo[]> => invoke("list_projects"),
+  renameProject: (projectId: string, name: string): Promise<void> =>
+    invoke("rename_project", { projectId, name }),
+  archiveProject: (projectId: string): Promise<void> =>
+    invoke("archive_project", { projectId }),
+
+  // Environments (Phase 10) — each owns its own entries under a fresh envKey.
+  createEnvironment: (
+    projectId: string,
+    name: string,
+  ): Promise<EnvironmentInfo> =>
+    invoke("create_environment", { projectId, name }),
+  listEnvironments: (projectId: string): Promise<EnvironmentInfo[]> =>
+    invoke("list_environments", { projectId }),
+  renameEnvironment: (envId: string, name: string): Promise<void> =>
+    invoke("rename_environment", { envId, name }),
+  archiveEnvironment: (envId: string): Promise<void> =>
+    invoke("archive_environment", { envId }),
   listEntries: (envId: string, search?: string): Promise<EntrySummary[]> =>
     invoke("list_entries", { envId, search: search ?? null }),
   getEntry: (envId: string, entryId: string): Promise<EntryDetail> =>

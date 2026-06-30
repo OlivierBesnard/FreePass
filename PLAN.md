@@ -19,9 +19,14 @@
 6. **Modèle de clés à 3 niveaux dès v1** (`masterKey → vaultKey → envKey`) : les entrées appartiennent
    à un **environnement** et sont chiffrées sous l'`envKey` de celui-ci. v1 expose au moins un
    environnement par défaut. Raison : rendre l'**accès agent IA scopé** (point 7) **additif** plus tard.
-7. **Accès agent IA = futur (Phase 10), pas v1.** Cible **non-supervisée** (clé d'accès déchiffrant un
+7. **Accès agent IA = futur (Phase 11), pas v1.** Cible **non-supervisée** (clé d'accès déchiffrant un
    environnement sans mot de passe maître), scoping **par environnement**. Seule l'architecture est
-   posée en v1 ; voir DESIGN §10, CRYPTO_SPEC §9, THREAT_MODEL F16–F20.
+   posée en v1 ; voir DESIGN §10, CRYPTO_SPEC §9, THREAT_MODEL F16–F20. *(Renumérotée : la Phase 10
+   accueille désormais « Projets & environnements ». DESIGN/CRYPTO_SPEC/THREAT_MODEL/SECURITY disent
+   encore « Phase 10 » pour l'agent IA — référence à réaligner hors PLAN.)*
+8. **Projets & environnements (Phase 10)** : calque **projet** (métadonnée claire) au-dessus des
+   environnements + émergence du **multi-environnement** dans l'UI. **100 % additif, zéro changement
+   crypto** : la hiérarchie `masterKey → vaultKey → envKey` est inchangée (CRYPTO_SPEC §3 reste figé).
 
 ---
 
@@ -105,9 +110,162 @@ coffre**) ; checklist de release.
 **Critères** : build reproductible signé ; smoke-test E2E (créer→déverrouiller→ajouter→autofill) sur
 la pile assemblée ; artefacts d'extension prêts à soumettre. 🔒 F15.
 
-## Phase 10 — Accès agent IA scopé (FUTUR, hors v1)
+## Phase 10 — Projets & environnements
+> **Modèle choisi (acté 2026-06-30)** : `Projet → Environnement → entrées indépendantes`. Le **projet**
+> est un nouveau niveau de regroupement **purement métadonnée claire** au-dessus des environnements ;
+> chaque environnement garde ses **propres entrées** (pas de crédential logique transverse). Cette phase
+> fait aussi **émerger le multi-environnement dans l'UI** (jusqu'ici masqué derrière l'env par défaut).
+> **Décision structurante : AUCUN changement crypto.** La hiérarchie reste `masterKey → vaultKey →
+> envKey` ; les entrées restent chiffrées sous l'`envKey` de **leur** environnement ; l'AAD est inchangé
+> (`env_id`+`entry_id`+`field_name`). C'est précisément l'esprit de l'indirection figée
+> (DESIGN §4/§10, CRYPTO_SPEC §3) : l'ajout est **additif, pas migratoire**.
+
+**Objectif** : pouvoir regrouper plusieurs environnements (dev/staging/prod…) sous un même **projet**,
+créer/renommer/archiver projets et environnements, et naviguer entre eux ; **sans re-chiffrer** quoi que
+ce soit et **sans casser l'autofill** (le navigateur ignore projets/envs).
+
+**Périmètre — IN** :
+- **Migration additive 004** : table `projects (id, name, created_at, updated_at, archived_at)` ;
+  `ALTER TABLE environments ADD COLUMN project_id TEXT REFERENCES projects(id)` (**nullable**). Aucune
+  colonne de principal (cf. invariant mono-user).
+- **Backfill au démarrage (Rust)** : créer un projet par défaut « Personnel » et y rattacher tout
+  environnement orphelin (`project_id IS NULL`). Idempotent. **Aucun re-chiffrement.**
+- **Création d'environnement** : générer une `envKey` fraîche (OsRng) emballée sous la `vaultKey`,
+  **en réutilisant** `crypto::wrap_env_key` + la logique de `services/vault.rs` (zéro primitive nouvelle).
+- **Commandes IPC** (contrat figé en annexe) : `create_project` / `list_projects` / `rename_project` /
+  `archive_project` ; `create_environment` / `list_environments` / `rename_environment` /
+  `archive_environment` ; mise à jour de `credentials_for_origin` (balayage **multi-env**).
+- **UI (FR)** : sélecteur projet → environnement ; écrans de gestion (créer/renommer/archiver) ; les
+  vues d'entrées existantes opèrent sur l'`env_id` sélectionné (au lieu du seul env par défaut).
+
+**Périmètre — OUT** (hors phase, anti scope creep) :
+- Déplacer une entrée d'un environnement à un autre (impliquerait un re-chiffrement sous une autre
+  `envKey`) → évolution future.
+- Déplacer un environnement d'un projet à un autre au-delà d'un simple `UPDATE project_id` (pas de
+  réorganisation crypto). *(Le re-parentage métadonnée pur peut rester OUT en v1 si non demandé.)*
+- Types d'entrée `secret` / `env_var`, partage, hiérarchie de projets imbriqués, clés d'accès agent
+  (→ Phase 11). Aucun nouveau champ chiffré.
+
+**Critères d'acceptation (testables)** :
+1. **Migration 004 additive** : appliquée automatiquement au démarrage sur une base existante ; les
+   environnements et entrées **préexistants restent lisibles** (déchiffrement OK, aucune `envKey`
+   re-générée). `cargo test` et `pnpm typecheck` au vert.
+2. **Invariant mono-user préservé** : `migrations_do_not_reference_multi_user_columns` **passe**
+   (`project_id` est un identifiant d'objet, jamais un principal ; aucun `user_id`/`owner_id`/
+   `tenant_id`/`created_by`). DESIGN §6.
+3. **Backfill idempotent** : au 1er démarrage post-migration, un projet « Personnel » existe et tout
+   environnement orphelin y est rattaché ; un 2ᵉ démarrage ne crée pas de doublon.
+4. **CRUD projet** : `create_project` / `list_projects` / `rename_project` / `archive_project`
+   fonctionnent ; `list_projects` n'expose **que** les projets non archivés (sauf demande explicite) ;
+   archiver est un **soft-delete** (`archived_at`), réversible côté données.
+5. **CRUD environnement** : `create_environment(project_id, name)` génère **une `envKey` fraîche
+   (OsRng)** emballée sous la `vaultKey` (vérifiable : la nouvelle ligne `environments` a un
+   `env_key_wrapped` distinct, qui s'unwrap sous la `vaultKey` et **uniquement** avec le bon `env_id` —
+   anti-swap F8) ; `list_environments(project_id)` liste les environnements non archivés du projet ;
+   rename/archive opèrent en métadonnée pure.
+6. **Crypto inchangée** : aucune modification de `crypto/`, de l'AAD, ni de `entry_fields` ; le test
+   `change_master_password_keeps_vault_key_and_invalidates_old` et les vecteurs crypto restent verts.
+   Toute entrée d'un environnement créé en Phase 10 chiffre/déchiffre comme l'env par défaut.
+7. **Autofill multi-env (CRITIQUE)** : `credentials_for_origin` balaie **tous les environnements non
+   archivés** (plus seulement l'env par défaut) et renvoie les identifiants matchant l'origine, quel
+   que soit leur environnement/projet. Le **match d'origine strict (eTLD+1)** est inchangé (F6) ; coffre
+   verrouillé ⇒ rien (F7). Test : une entrée créée dans un **second** environnement est autofillée.
+8. **Coffre verrouillé** : toutes les commandes projet/environnement exigent l'unlock (fail-closed
+   `VaultLocked`), comme les commandes entries existantes.
+9. **Texte UI en français**, identifiants techniques/commentaires en anglais ; UUID v4, RFC3339,
+   soft-delete via `archived_at`.
+
+**Mitigations 🔒 rattachées** : F1/F2 (aucune `envKey`/clé en clair — les nouvelles `envKey` sont
+emballées comme l'existante), F6 (match d'origine strict inchangé), F7 (canal sert seulement déverrouillé),
+F8 (AAD liant `env_id` ⇒ une `envKey` ne déchiffre pas un autre environnement). **Invariant mono-user**
+(DESIGN §6).
+
+### Annexe — CONTRAT IPC FIGÉ (Phase 10)
+> Référence unique pour `developer` (Rust) et `frontend` (TS). Conventions inchangées : noms de
+> commandes en **snake_case** (Rust `#[tauri::command]`) ; les arguments d'`invoke` sont en
+> **camelCase** (Tauri convertit `snake_case` Rust → `camelCase` JS) ; `AppError` sérialisé en string ;
+> tout passe par `src/lib/api.ts`. Les structs de réponse dérivent `Serialize` (camelCase **non** forcé
+> ⇒ champs `snake_case` côté JSON, comme `EntrySummary.env_id` / `EnvironmentInfo` aujourd'hui).
+
+**Structs Rust (à ajouter dans `models/`)**
+```rust
+// models/project.rs
+#[derive(Debug, Serialize)]
+pub struct ProjectInfo {
+    pub id: String,            // UUID v4
+    pub name: String,          // clear metadata (FR libre)
+    pub created_at: String,    // RFC3339
+    pub updated_at: String,
+}
+
+// EnvironmentInfo (models/entry.rs) — ÉTENDU : ajouter project_id.
+#[derive(Debug, Serialize)]
+pub struct EnvironmentInfo {
+    pub id: String,
+    pub name: String,
+    pub project_id: Option<String>,   // NEW — nullable le temps du backfill
+}
+```
+
+**Types TS (à ajouter/étendre dans `src/lib/api.ts`)**
+```ts
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+// EnvironmentInfo étendu :
+export interface EnvironmentInfo {
+  id: string;
+  name: string;
+  project_id: string | null;   // NEW
+}
+```
+
+**Commandes — projets**
+| Commande Rust | Wrapper api.ts | Params (`invoke`) | Réponse |
+|---|---|---|---|
+| `create_project(name: String)` | `createProject(name)` | `{ name }` | `ProjectInfo` |
+| `list_projects()` | `listProjects()` | `{}` | `ProjectInfo[]` (non archivés, tri `name COLLATE NOCASE`) |
+| `rename_project(project_id, name)` | `renameProject(projectId, name)` | `{ projectId, name }` | `void` |
+| `archive_project(project_id)` | `archiveProject(projectId)` | `{ projectId }` | `void` (soft-delete `archived_at`) |
+
+**Commandes — environnements**
+| Commande Rust | Wrapper api.ts | Params (`invoke`) | Réponse |
+|---|---|---|---|
+| `create_environment(project_id, name)` | `createEnvironment(projectId, name)` | `{ projectId, name }` | `EnvironmentInfo` (génère `envKey` fraîche emballée sous `vaultKey`) |
+| `list_environments(project_id)` | `listEnvironments(projectId)` | `{ projectId }` | `EnvironmentInfo[]` (non archivés du projet) |
+| `rename_environment(env_id, name)` | `renameEnvironment(envId, name)` | `{ envId, name }` | `void` |
+| `archive_environment(env_id)` | `archiveEnvironment(envId)` | `{ envId }` | `void` (soft-delete `archived_at`) |
+
+**Commandes existantes — impact**
+- `default_environment()` → **conservée** (rétrocompat : renvoie le 1er env non archivé, désormais
+  enrichi de `project_id`). Sert de sélection par défaut au 1er rendu. *Le `frontend` migre l'UI vers la
+  sélection projet/env mais ne supprime pas la commande dans cette phase.*
+- `credentials_for_origin()` (dans `services/local_channel.rs`, **pas** une commande IPC) → **MODIFIÉE** :
+  itère sur **tous** les environnements non archivés (`SELECT id FROM environments WHERE archived_at IS
+  NULL`), charge chaque `envKey` via `vault::load_env_key`, et agrège les crédentials matchant l'origine.
+  Signature publique inchangée. C'est le critère d'acceptation #7.
+- Commandes `entries` (`list/get/create/update/...`) → **inchangées** : elles prennent déjà `env_id` en
+  paramètre. Le `frontend` passe l'`env_id` **sélectionné** au lieu de celui de `default_environment`.
+
+**Règles de validation (service layer)**
+- `name` projet/environnement : trim non vide (sinon `AppError::Conflict("le nom est requis")`),
+  cohérent avec la validation `title` des entrées.
+- Toutes les commandes : fail-closed `VaultLocked` si le coffre n'est pas déverrouillé (création d'env
+  nécessite la `vaultKey` pour emballer la nouvelle `envKey`).
+- `create_environment` : `project_id` doit référencer un projet existant non archivé (sinon
+  `AppError::NotFound`).
+
+---
+
+## Phase 11 — Accès agent IA scopé (FUTUR, hors v1)
 > Réalisable sans migration grâce à l'indirection `envKey` posée en v1 (décision 6). À **re-cadrer
 > (briefer) et re-figer (CRYPTO_SPEC §9)** avant de démarrer. Réf : DESIGN §10, THREAT_MODEL F16–F20.
+> *(Anciennement « Phase 10 » ; renumérotée pour insérer « Projets & environnements ». Les références
+> « Phase 10 » dans DESIGN/CRYPTO_SPEC/THREAT_MODEL/SECURITY pointent vers cette phase et restent à
+> réaligner.)*
 **Livrables (cible)** : types `secret` / `env_var` + gestion d'**environnements** dans l'UI ; création
 de **clés d'accès** scopées à un environnement (emballage de l'`envKey` sous la clé d'accès) ;
 expiration + **révocation = rotation de l'`envKey`** ; **journal d'audit** des accès ; surface de
@@ -120,7 +278,7 @@ machine ; audit complet sans valeur de secret. 🔒 F16, F17, F18, F19, F20.
 ---
 
 ## Hors scope v1 (évolutions futures)
-Accès agent IA (→ **Phase 10** ci-dessus), synchronisation multi-appareils, partage, TOTP/2FA intégré,
+Accès agent IA (→ **Phase 11** ci-dessus), synchronisation multi-appareils, partage, TOTP/2FA intégré,
 attachements chiffrés, audit de fuite (HIBP), déverrouillage biométrique/OS keychain, navigateurs
 au-delà de Chrome/Firefox. À reconsidérer après dogfooding — ne pas laisser fuiter dans v1 (anti scope
 creep, rôle `plan-keeper`).
