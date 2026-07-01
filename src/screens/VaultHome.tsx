@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   ChevronRight,
+  Copy,
+  ExternalLink,
+  Eye,
+  EyeOff,
   FolderCog,
   KeyRound,
   LockKeyhole,
@@ -9,6 +14,7 @@ import {
   Puzzle,
   Search,
   Upload,
+  User,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -25,6 +31,8 @@ import {
 import { useAllEnvironments } from "../hooks/useProjects";
 import { useAutoLock } from "../hooks/useAutoLock";
 import { registrableDomain } from "../lib/domain";
+import { copyPlain, copySecret } from "../lib/clipboard";
+import { openExternal } from "../lib/openExternal";
 import { Button, inputClass } from "../components/ui";
 import { EntryForm } from "../components/EntryForm";
 import { EntryDetailView } from "../components/EntryDetail";
@@ -141,12 +149,12 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
   return (
     <main className="bg-mesh min-h-full">
       <header className="border-b border-cream-400/60 bg-card/60 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-3xl items-center gap-3 px-6 py-3">
+        <div className="mx-auto flex max-w-3xl items-center gap-2 px-4 py-3 min-[720px]:gap-3 min-[720px]:px-6">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="avatar-gradient flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold text-white">
+            <span className="avatar-gradient flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white">
               F
             </span>
-            <span className="font-serif text-base font-semibold text-ink-800">
+            <span className="hidden font-serif text-base font-semibold text-ink-800 min-[720px]:block">
               FreePass
             </span>
           </div>
@@ -171,8 +179,10 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
             onClick={() => setCreating(true)}
             className="h-9 shrink-0"
             disabled={!defaultEnvId}
+            title="Ajouter un identifiant"
           >
-            <Plus size={16} className="mr-1" /> Ajouter
+            <Plus size={16} className="min-[720px]:mr-1" />
+            <span className="hidden min-[720px]:inline">Ajouter</span>
           </Button>
           <button
             onClick={() => setImportOpen(true)}
@@ -209,9 +219,11 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
           </button>
           <button
             onClick={lockNow}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-ink-600 transition-colors hover:bg-cream-300"
+            title="Verrouiller"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-cream-400 px-2.5 text-sm font-medium text-ink-600 transition-colors hover:bg-cream-300 min-[720px]:px-3"
           >
-            <LockKeyhole size={15} /> Verrouiller
+            <LockKeyhole size={15} />
+            <span className="hidden min-[720px]:inline">Verrouiller</span>
           </button>
         </div>
       </header>
@@ -225,40 +237,41 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
             hasSearch={searching}
             canAdd={!!defaultEnvId}
           />
-        ) : searching ? (
-          <ul className="space-y-2">
-            {entries.map((e) => (
-              <EntryRow
-                key={e.id}
-                entry={e}
-                icon={icons[e.id]}
-                showEnvBadge={showEnvBadge}
-                onOpen={() => setSelected(e)}
-              />
-            ))}
-          </ul>
         ) : (
-          <ul className="space-y-2">
-            {groups.map((g) =>
-              g.entries.length >= 2 ? (
-                <DomainGroupRow
-                  key={g.domain || "__no-site__"}
-                  group={g}
-                  icons={icons}
-                  showEnvBadge={showEnvBadge}
-                  onOpen={setSelected}
-                />
-              ) : (
-                <EntryRow
-                  key={g.entries[0].id}
-                  entry={g.entries[0]}
-                  icon={icons[g.entries[0].id]}
-                  showEnvBadge={showEnvBadge}
-                  onOpen={() => setSelected(g.entries[0])}
-                />
-              ),
-            )}
-          </ul>
+          <div className="overflow-hidden rounded-2xl border border-cream-400 bg-card shadow-soft">
+            {searching
+              ? entries.map((e, i) => (
+                  <DenseRow
+                    key={e.id}
+                    entry={e}
+                    icon={icons[e.id]}
+                    showEnvBadge={showEnvBadge}
+                    first={i === 0}
+                    onOpen={() => setSelected(e)}
+                  />
+                ))
+              : groups.map((g, i) =>
+                  g.entries.length >= 2 ? (
+                    <DomainGroupRow
+                      key={g.domain || "__no-site__"}
+                      group={g}
+                      icons={icons}
+                      showEnvBadge={showEnvBadge}
+                      first={i === 0}
+                      onOpen={setSelected}
+                    />
+                  ) : (
+                    <DenseRow
+                      key={g.entries[0].id}
+                      entry={g.entries[0]}
+                      icon={icons[g.entries[0].id]}
+                      showEnvBadge={showEnvBadge}
+                      first={i === 0}
+                      onOpen={() => setSelected(g.entries[0])}
+                    />
+                  ),
+                )}
+          </div>
         )}
       </div>
 
@@ -317,38 +330,56 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
   );
 }
 
-/** A single flat credential row, with an optional environment badge. */
-function EntryRow({
+const onActivate =
+  (fn: () => void) => (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      fn();
+    }
+  };
+
+/** Dense credential row with inline quick actions (reveal / copy / open). */
+function DenseRow({
   entry,
   icon,
   showEnvBadge,
+  first = false,
+  indent = false,
   onOpen,
 }: {
   entry: EntrySummary;
   icon?: string;
   showEnvBadge: boolean;
+  first?: boolean;
+  indent?: boolean;
   onOpen: () => void;
 }) {
   return (
-    <li>
-      <button
-        onClick={onOpen}
-        className="row-hover flex w-full items-center gap-3 rounded-xl border border-cream-400 bg-card px-4 py-3 text-left shadow-soft transition-colors"
-      >
-        <EntryIcon icon={icon} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium text-ink-800">
-            {entry.title}
-          </span>
-          {entry.url && (
-            <span className="block truncate text-xs text-ink-400">
-              {entry.url}
-            </span>
-          )}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={onActivate(onOpen)}
+      className={
+        "row-hover flex cursor-pointer items-center gap-2.5 px-3 py-2 outline-none focus-visible:bg-cream-200 " +
+        (first ? "" : "border-t border-cream-300 ") +
+        (indent ? "bg-cream-200/40 pl-9" : "")
+      }
+    >
+      <EntryIcon icon={icon} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-semibold text-ink-800">
+          {entry.title}
         </span>
-        {showEnvBadge && entry.env_name && <EnvBadge name={entry.env_name} />}
-      </button>
-    </li>
+        {entry.url && (
+          <span className="block truncate text-[11px] text-ink-400">
+            {entry.url}
+          </span>
+        )}
+      </span>
+      {showEnvBadge && entry.env_name && <EnvBadge name={entry.env_name} />}
+      <QuickActions entry={entry} />
+    </div>
   );
 }
 
@@ -357,11 +388,13 @@ function DomainGroupRow({
   group,
   icons,
   showEnvBadge,
+  first,
   onOpen,
 }: {
   group: DomainGroup;
   icons: Record<string, string>;
   showEnvBadge: boolean;
+  first: boolean;
   onOpen: (entry: EntrySummary) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -370,56 +403,154 @@ function DomainGroupRow({
   const label = group.domain || "Sans site";
 
   return (
-    <li>
-      <button
+    <div className={first ? "" : "border-t border-cream-300"}>
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen((v) => !v)}
-        className="row-hover flex w-full items-center gap-3 rounded-xl border border-cream-400 bg-card px-4 py-3 text-left shadow-soft transition-colors"
+        onKeyDown={onActivate(() => setOpen((v) => !v))}
         aria-expanded={open}
+        className="row-hover flex cursor-pointer items-center gap-2.5 px-3 py-2 outline-none focus-visible:bg-cream-200"
       >
-        <EntryIcon icon={groupIcon} fallbackLabel={label} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium text-ink-800">
-            {label}
-          </span>
-          <span className="block text-xs text-ink-400">
-            {group.entries.length} identifiants
-          </span>
-        </span>
         <ChevronRight
-          size={16}
+          size={15}
           className={
             "shrink-0 text-ink-300 transition-transform " +
             (open ? "rotate-90" : "")
           }
         />
-      </button>
+        <EntryIcon icon={groupIcon} fallbackLabel={label} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-semibold text-ink-800">
+            {label}
+          </span>
+          <span className="block text-[11px] text-ink-400">
+            {group.entries.length} identifiants
+          </span>
+        </span>
+      </div>
+      {open &&
+        group.entries.map((e) => (
+          <DenseRow
+            key={e.id}
+            entry={e}
+            icon={icons[e.id]}
+            showEnvBadge={showEnvBadge}
+            indent
+            onOpen={() => onOpen(e)}
+          />
+        ))}
+    </div>
+  );
+}
 
-      {open && (
-        <ul className="mt-2 space-y-2 border-l-2 border-cream-400 pl-3">
-          {group.entries.map((e) => (
-            <li key={e.id}>
-              <button
-                onClick={() => onOpen(e)}
-                className="row-hover flex w-full items-center gap-3 rounded-xl border border-cream-400 bg-card px-4 py-2.5 text-left shadow-soft transition-colors"
-              >
-                <EntryIcon icon={icons[e.id]} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium text-ink-800">
-                    {e.title}
-                  </span>
-                  {e.url && (
-                    <span className="block truncate text-xs text-ink-400">
-                      {e.url}
-                    </span>
-                  )}
-                </span>
-                {showEnvBadge && e.env_name && <EnvBadge name={e.env_name} />}
-              </button>
-            </li>
-          ))}
-        </ul>
+/**
+ * Inline quick actions: reveal / copy password / copy username / open site.
+ * Secrets are fetched ON DEMAND for this one entry (never bulk-loaded), then
+ * cached by react-query and purged on lock (F3/F5).
+ */
+function QuickActions({ entry }: { entry: EntrySummary }) {
+  const qc = useQueryClient();
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () =>
+    qc.fetchQuery({
+      queryKey: ["entry", entry.env_id, entry.id],
+      queryFn: () => api.getEntry(entry.env_id, entry.id),
+      staleTime: 30_000,
+    });
+
+  const run =
+    (fn: () => Promise<void>) => async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (busy) return;
+      setBusy(true);
+      try {
+        await fn();
+      } catch (err) {
+        toast.error(errorMessage(err));
+      } finally {
+        setBusy(false);
+      }
+    };
+
+  const toggleReveal = run(async () => {
+    if (revealed !== null) {
+      setRevealed(null);
+      return;
+    }
+    const d = await load();
+    setRevealed(d.password ?? "—");
+  });
+  const copyPw = run(async () => {
+    const d = await load();
+    if (d.password) copySecret(d.password, "Mot de passe");
+    else toast.info("Aucun mot de passe sur cette entrée.");
+  });
+  const copyUser = run(async () => {
+    const d = await load();
+    if (d.username) copyPlain(d.username, "Identifiant");
+    else toast.info("Aucun identifiant sur cette entrée.");
+  });
+
+  return (
+    <div
+      className="flex items-center gap-1"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span
+        className="mr-0.5 hidden w-16 truncate text-right font-mono text-[11px] tracking-widest text-ink-400 sm:inline"
+        title={revealed ?? undefined}
+      >
+        {revealed !== null ? revealed : "••••••••"}
+      </span>
+      <ActBtn
+        title={revealed !== null ? "Masquer" : "Révéler"}
+        onClick={toggleReveal}
+      >
+        {revealed !== null ? <EyeOff size={15} /> : <Eye size={15} />}
+      </ActBtn>
+      <ActBtn title="Copier le mot de passe" onClick={copyPw}>
+        <Copy size={15} />
+      </ActBtn>
+      <ActBtn title="Copier l'identifiant" onClick={copyUser}>
+        <User size={15} />
+      </ActBtn>
+      {entry.url && (
+        <ActBtn
+          title="Ouvrir le site"
+          onClick={(e) => {
+            e.stopPropagation();
+            openExternal(entry.url!);
+          }}
+        >
+          <ExternalLink size={15} />
+        </ActBtn>
       )}
-    </li>
+    </div>
+  );
+}
+
+function ActBtn({
+  title,
+  onClick,
+  children,
+}: {
+  title: string;
+  onClick: (e: React.MouseEvent) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-cream-300 hover:text-brand-600"
+    >
+      {children}
+    </button>
   );
 }
 
@@ -443,11 +574,11 @@ function EntryIcon({
   const [broken, setBroken] = useState(false);
   if (icon && !broken) {
     return (
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-cream-400 bg-card">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md border border-cream-400 bg-card">
         <img
           src={icon}
           alt=""
-          className="h-5 w-5 object-contain"
+          className="h-4 w-4 object-contain"
           onError={() => setBroken(true)}
         />
       </span>
@@ -455,11 +586,11 @@ function EntryIcon({
   }
   const letter = fallbackLabel?.trim()?.[0]?.toUpperCase();
   return (
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-100 text-brand-700">
+    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand-100 text-brand-700">
       {letter ? (
-        <span className="text-sm font-semibold">{letter}</span>
+        <span className="text-xs font-semibold">{letter}</span>
       ) : (
-        <KeyRound size={17} />
+        <KeyRound size={15} />
       )}
     </span>
   );

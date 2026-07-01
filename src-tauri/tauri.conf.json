@@ -13,10 +13,11 @@
     "windows": [
       {
         "title": "FreePass",
-        "width": 1100,
-        "height": 760,
-        "minWidth": 880,
-        "minHeight": 560
+        "width": 760,
+        "height": 680,
+        "minWidth": 560,
+        "minHeight": 440,
+        "decorations": false
       }
     ],
     "security": {

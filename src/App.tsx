@@ -5,6 +5,7 @@ import { CreateVault } from "./screens/CreateVault";
 import { UnlockVault } from "./screens/UnlockVault";
 import { VaultHome } from "./screens/VaultHome";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { Titlebar } from "./components/Titlebar";
 
 /**
  * Root state machine. Reads the vault status and shows the right screen:
@@ -58,8 +59,9 @@ function App() {
 
   return (
     <div className="flex h-full flex-col">
+      <Titlebar />
       <UpdateBanner />
-      <div className="min-h-0 flex-1">{screen}</div>
+      <div className="min-h-0 flex-1 overflow-auto">{screen}</div>
     </div>
   );
 }
