@@ -1284,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "freepass"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "argon2",
  "axum",

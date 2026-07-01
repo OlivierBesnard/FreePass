@@ -1,6 +1,6 @@
 [package]
 name = "freepass"
-version = "0.1.4"
+version = "0.1.5"
 description = "Local-first, mono-user password manager"
 authors = ["Olivier Besnard"]
 edition = "2021"

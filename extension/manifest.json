@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FreePass",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Pré-remplit vos identifiants depuis votre coffre FreePass local (127.0.0.1).",
   "action": {
     "default_popup": "popup.html",
