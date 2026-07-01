@@ -72,6 +72,20 @@ pub async fn list_entries(
     entries::list_entries(&state.pool, &env_id, search.as_deref()).await
 }
 
+/// Unified, by-site list: clear-metadata summaries across ALL live environments
+/// (Phase 10 UX). Reads clear metadata only — no env key needed, but require
+/// unlock (fail-closed `VaultLocked`), like `list_entries`.
+#[tauri::command]
+pub async fn list_all_entries(
+    state: State<'_, AppState>,
+    search: Option<String>,
+) -> AppResult<Vec<EntrySummary>> {
+    if !state.session.lock().map_err(|_| session_unavailable())?.is_unlocked() {
+        return Err(AppError::VaultLocked);
+    }
+    entries::list_all_entries(&state.pool, search.as_deref()).await
+}
+
 #[tauri::command]
 pub async fn get_entry(
     state: State<'_, AppState>,

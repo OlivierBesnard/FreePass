@@ -4,13 +4,35 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, errorMessage } from "../lib/api";
+import { api, errorMessage, type EnvironmentInfo } from "../lib/api";
 
 /** All non-archived projects (sorted by name in Rust). */
 export function useProjects() {
   return useQuery({
     queryKey: ["projects"],
     queryFn: api.listProjects,
+  });
+}
+
+/**
+ * Flat lookup of every live environment across every live project, keyed by
+ * environment id. Lets the unified entry list resolve an entry's owning project
+ * (for edit / duplicate) without the user navigating a hierarchy.
+ */
+export function useAllEnvironments() {
+  return useQuery({
+    queryKey: ["all-environments"],
+    queryFn: async (): Promise<Record<string, EnvironmentInfo>> => {
+      const projects = await api.listProjects();
+      const lists = await Promise.all(
+        projects.map((p) => api.listEnvironments(p.id)),
+      );
+      const map: Record<string, EnvironmentInfo> = {};
+      for (const list of lists) {
+        for (const env of list) map[env.id] = env;
+      }
+      return map;
+    },
   });
 }
 
@@ -23,12 +45,31 @@ export function useEnvironments(projectId: string | undefined) {
   });
 }
 
+/**
+ * Invalidate the project/environment caches AND the unified entry list, since
+ * creating/renaming/archiving a project or environment changes what the grouped
+ * home view shows (badges, available targets, the env lookup).
+ */
+function invalidateProjectTree(
+  qc: ReturnType<typeof useQueryClient>,
+  projectId?: string,
+) {
+  void qc.invalidateQueries({ queryKey: ["projects"] });
+  void qc.invalidateQueries({ queryKey: ["all-environments"] });
+  void qc.invalidateQueries({ queryKey: ["all-entries"] });
+  if (projectId) {
+    void qc.invalidateQueries({ queryKey: ["environments", projectId] });
+  } else {
+    void qc.invalidateQueries({ queryKey: ["environments"] });
+  }
+}
+
 export function useCreateProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (name: string) => api.createProject(name),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["projects"] });
+      invalidateProjectTree(qc);
       toast.success("Projet créé.");
     },
     onError: (e) => toast.error(errorMessage(e)),
@@ -41,7 +82,7 @@ export function useRenameProject() {
     mutationFn: (args: { projectId: string; name: string }) =>
       api.renameProject(args.projectId, args.name),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["projects"] });
+      invalidateProjectTree(qc);
       toast.success("Projet renommé.");
     },
     onError: (e) => toast.error(errorMessage(e)),
@@ -53,7 +94,7 @@ export function useArchiveProject() {
   return useMutation({
     mutationFn: (projectId: string) => api.archiveProject(projectId),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["projects"] });
+      invalidateProjectTree(qc);
       toast.success("Projet archivé.");
     },
     onError: (e) => toast.error(errorMessage(e)),
@@ -66,7 +107,7 @@ export function useCreateEnvironment(projectId: string | undefined) {
     mutationFn: (name: string) =>
       api.createEnvironment(projectId as string, name),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["environments", projectId] });
+      invalidateProjectTree(qc, projectId);
       toast.success("Environnement créé.");
     },
     onError: (e) => toast.error(errorMessage(e)),
@@ -79,7 +120,7 @@ export function useRenameEnvironment(projectId: string | undefined) {
     mutationFn: (args: { envId: string; name: string }) =>
       api.renameEnvironment(args.envId, args.name),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["environments", projectId] });
+      invalidateProjectTree(qc, projectId);
       toast.success("Environnement renommé.");
     },
     onError: (e) => toast.error(errorMessage(e)),
@@ -91,7 +132,7 @@ export function useArchiveEnvironment(projectId: string | undefined) {
   return useMutation({
     mutationFn: (envId: string) => api.archiveEnvironment(envId),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["environments", projectId] });
+      invalidateProjectTree(qc, projectId);
       toast.success("Environnement archivé.");
     },
     onError: (e) => toast.error(errorMessage(e)),

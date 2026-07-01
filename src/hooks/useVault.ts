@@ -23,6 +23,17 @@ export function useEntries(envId: string | undefined, search: string) {
   });
 }
 
+/**
+ * Unified flat list of entries across ALL live environments, optionally
+ * filtered by a local search. Backs the grouped-by-site home view.
+ */
+export function useAllEntries(search: string) {
+  return useQuery({
+    queryKey: ["all-entries", search],
+    queryFn: () => api.listAllEntries(search || undefined),
+  });
+}
+
 /** Full decrypted entry, fetched only when an entry is opened. */
 export function useEntry(envId: string | undefined, entryId: string | null) {
   return useQuery({
@@ -42,6 +53,24 @@ export function useEntryIcons(envId: string | undefined) {
 }
 
 /**
+ * Merged favicon map across several environments, keyed by entry id. Backs the
+ * unified list, whose entries span multiple environments. Entry ids are unique
+ * across environments, so a flat merge is unambiguous.
+ */
+export function useAllEntryIcons(envIds: string[]) {
+  // Stable key independent of order so the cache hits regardless of list order.
+  const sorted = [...new Set(envIds)].sort();
+  return useQuery({
+    queryKey: ["allEntryIcons", sorted],
+    queryFn: async (): Promise<Record<string, string>> => {
+      const maps = await Promise.all(sorted.map((id) => api.entryIcons(id)));
+      return Object.assign({}, ...maps) as Record<string, string>;
+    },
+    enabled: sorted.length > 0,
+  });
+}
+
+/**
  * Fetch + store an entry's favicon in the background, then refresh the icon
  * caches. Best-effort: a failure is silent (the icon is purely cosmetic).
  */
@@ -56,14 +85,24 @@ function refreshIcon(
     .refreshEntryIcon(envId, entryId, url)
     .then(() => {
       void qc.invalidateQueries({ queryKey: ["entryIcons", envId] });
+      void qc.invalidateQueries({ queryKey: ["allEntryIcons"] });
       void qc.invalidateQueries({ queryKey: ["entry", envId, entryId] });
     })
     .catch(() => {});
 }
 
+/**
+ * Invalidate both the per-environment lists and the unified cross-env list so
+ * the grouped home view and any open environment view stay in sync.
+ */
+function invalidateEntryLists(qc: ReturnType<typeof useQueryClient>) {
+  void qc.invalidateQueries({ queryKey: ["entries"] });
+  void qc.invalidateQueries({ queryKey: ["all-entries"] });
+}
+
 function useEntryInvalidation() {
   const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: ["entries"] });
+  return () => invalidateEntryLists(qc);
 }
 
 export function useCreateEntry(envId: string | undefined) {
@@ -71,7 +110,7 @@ export function useCreateEntry(envId: string | undefined) {
   return useMutation({
     mutationFn: (input: EntryInput) => api.createEntry(envId as string, input),
     onSuccess: (newId, input) => {
-      void qc.invalidateQueries({ queryKey: ["entries"] });
+      invalidateEntryLists(qc);
       // Grab the site favicon in the background (direct-to-site, encrypted).
       refreshIcon(qc, envId as string, newId, input.url);
       toast.success("Identifiant ajouté.");
@@ -86,7 +125,7 @@ export function useUpdateEntry(envId: string | undefined) {
     mutationFn: (args: { entryId: string; input: EntryInput }) =>
       api.updateEntry(envId as string, args.entryId, args.input),
     onSuccess: (_data, args) => {
-      void qc.invalidateQueries({ queryKey: ["entries"] });
+      invalidateEntryLists(qc);
       void qc.invalidateQueries({ queryKey: ["entry", envId, args.entryId] });
       // Refresh the favicon in case the URL changed.
       refreshIcon(qc, envId as string, args.entryId, args.input.url);
@@ -117,7 +156,7 @@ export function useDuplicateEntryToEnvironment(sourceEnvId: string | undefined) 
       return { newId, targetEnvId: args.targetEnvId, url: detail.url };
     },
     onSuccess: ({ newId, targetEnvId, url }) => {
-      void qc.invalidateQueries({ queryKey: ["entries"] });
+      invalidateEntryLists(qc);
       refreshIcon(qc, targetEnvId, newId, url);
       toast.success("Identifiant dupliqué dans l'environnement.");
     },
@@ -147,9 +186,29 @@ export function useArchivedEntries(envId: string | undefined) {
   });
 }
 
+/**
+ * Archived entries aggregated across several environments (the unified trash).
+ * Each summary keeps its own `env_id`, so restore/delete can target the right
+ * environment without the user navigating a hierarchy.
+ */
+export function useAllArchivedEntries(envIds: string[]) {
+  const sorted = [...new Set(envIds)].sort();
+  return useQuery({
+    queryKey: ["allArchived", sorted],
+    queryFn: async () => {
+      const lists = await Promise.all(
+        sorted.map((id) => api.listArchivedEntries(id)),
+      );
+      return lists.flat();
+    },
+    enabled: sorted.length > 0,
+  });
+}
+
 function invalidateLists(qc: ReturnType<typeof useQueryClient>) {
-  void qc.invalidateQueries({ queryKey: ["entries"] });
+  invalidateEntryLists(qc);
   void qc.invalidateQueries({ queryKey: ["archived"] });
+  void qc.invalidateQueries({ queryKey: ["allArchived"] });
 }
 
 export function useArchiveEntry(envId: string | undefined) {
@@ -180,6 +239,37 @@ export function useDeleteEntry(envId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (entryId: string) => api.deleteEntry(envId as string, entryId),
+    onSuccess: () => {
+      invalidateLists(qc);
+      toast.success("Identifiant supprimé définitivement.");
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+}
+
+/**
+ * Restore an archived entry, taking its environment per call (the unified trash
+ * spans several environments).
+ */
+export function useRestoreEntryAt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { envId: string; entryId: string }) =>
+      api.restoreEntry(args.envId, args.entryId),
+    onSuccess: () => {
+      invalidateLists(qc);
+      toast.success("Identifiant restauré.");
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+}
+
+/** Permanently delete an archived entry, taking its environment per call. */
+export function useDeleteEntryAt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { envId: string; entryId: string }) =>
+      api.deleteEntry(args.envId, args.entryId),
     onSuccess: () => {
       invalidateLists(qc);
       toast.success("Identifiant supprimé définitivement.");

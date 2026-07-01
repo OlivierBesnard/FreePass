@@ -31,6 +31,11 @@ export interface EntrySummary {
   title: string;
   url: string | null;
   updated_at: string;
+  /**
+   * Name of the owning environment (clear metadata, never a secret). Present on
+   * the unified `list_all_entries` view; may be null for legacy/per-env lists.
+   */
+  env_name: string | null;
 }
 
 export interface EntryDetail {
@@ -101,6 +106,13 @@ export const api = {
     invoke("archive_environment", { envId }),
   listEntries: (envId: string, search?: string): Promise<EntrySummary[]> =>
     invoke("list_entries", { envId, search: search ?? null }),
+  /**
+   * Unified flat list of entries across ALL live environments (non-archived
+   * env + non-archived project), each carrying its `env_name`. Optional local
+   * search filters on title/url server-side.
+   */
+  listAllEntries: (search?: string): Promise<EntrySummary[]> =>
+    invoke("list_all_entries", { search: search ?? null }),
   getEntry: (envId: string, entryId: string): Promise<EntryDetail> =>
     invoke("get_entry", { envId, entryId }),
   createEntry: (envId: string, input: EntryInput): Promise<string> =>

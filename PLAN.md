@@ -124,6 +124,16 @@ la pile assemblée ; artefacts d'extension prêts à soumettre. 🔒 F15.
 créer/renommer/archiver projets et environnements, et naviguer entre eux ; **sans re-chiffrer** quoi que
 ce soit et **sans casser l'autofill** (le navigateur ignore projets/envs).
 
+> **Raffinement UX (acté 2026-06-30)** : le **point d'entrée** de l'app est une **liste unifiée** qui
+> montre les entrées de **tous les environnements vivants**, **regroupées par site** (domaine
+> enregistrable, regroupement calculé **côté front**). L'**environnement n'est plus un préalable de
+> navigation** : il devient un **badge optionnel** sur chaque entrée et reste la **fondation crypto**
+> conservée (`envKey` par environnement, indirection figée). Le sélecteur projet → environnement et les
+> écrans de gestion restent disponibles pour scoper/organiser, mais l'utilisateur n'a plus à choisir un
+> environnement pour voir ses mots de passe. **Toujours zéro changement crypto** : la liste unifiée lit
+> de la **métadonnée claire uniquement** (titre/url/nom d'env), exactement comme `list_entries` — aucun
+> déchiffrement, aucune `envKey`.
+
 **Périmètre — IN** :
 - **Migration additive 004** : table `projects (id, name, created_at, updated_at, archived_at)` ;
   `ALTER TABLE environments ADD COLUMN project_id TEXT REFERENCES projects(id)` (**nullable**). Aucune
@@ -134,9 +144,13 @@ ce soit et **sans casser l'autofill** (le navigateur ignore projets/envs).
   **en réutilisant** `crypto::wrap_env_key` + la logique de `services/vault.rs` (zéro primitive nouvelle).
 - **Commandes IPC** (contrat figé en annexe) : `create_project` / `list_projects` / `rename_project` /
   `archive_project` ; `create_environment` / `list_environments` / `rename_environment` /
-  `archive_environment` ; mise à jour de `credentials_for_origin` (balayage **multi-env**).
-- **UI (FR)** : sélecteur projet → environnement ; écrans de gestion (créer/renommer/archiver) ; les
-  vues d'entrées existantes opèrent sur l'`env_id` sélectionné (au lieu du seul env par défaut).
+  `archive_environment` ; **`list_all_entries`** (liste unifiée multi-env, métadonnée claire) ; mise à
+  jour de `credentials_for_origin` (balayage **multi-env**).
+- **UI (FR)** : **liste unifiée par site** comme écran d'accueil (alimentée par `list_all_entries`,
+  **regroupement par domaine enregistrable calculé côté front**), avec l'environnement en **badge
+  optionnel** sur chaque entrée ; sélecteur projet → environnement et écrans de gestion
+  (créer/renommer/archiver) disponibles pour scoper/organiser ; les vues d'entrées scopées opèrent sur
+  l'`env_id` sélectionné (au lieu du seul env par défaut).
 
 **Périmètre — OUT** (hors phase, anti scope creep) :
 - Déplacer une entrée d'un environnement à un autre (impliquerait un re-chiffrement sous une autre
@@ -172,7 +186,12 @@ ce soit et **sans casser l'autofill** (le navigateur ignore projets/envs).
    verrouillé ⇒ rien (F7). Test : une entrée créée dans un **second** environnement est autofillée.
 8. **Coffre verrouillé** : toutes les commandes projet/environnement exigent l'unlock (fail-closed
    `VaultLocked`), comme les commandes entries existantes.
-9. **Texte UI en français**, identifiants techniques/commentaires en anglais ; UUID v4, RFC3339,
+9. **Liste unifiée par site** : `list_all_entries` renvoie les entrées de **tous** les environnements
+   vivants (env non archivé ET projet non archivé), métadonnée claire only (aucun secret, F5), chaque
+   ligne portant `env_name` ; recherche locale sur `title`/`url` ; fail-closed `VaultLocked` si verrouillé.
+   Test : des entrées de **deux** environnements apparaissent toutes avec le bon `env_name` ; une entrée
+   d'un environnement OU projet archivé est exclue.
+10. **Texte UI en français**, identifiants techniques/commentaires en anglais ; UUID v4, RFC3339,
    soft-delete via `archived_at`.
 
 **Mitigations 🔒 rattachées** : F1/F2 (aucune `envKey`/clé en clair — les nouvelles `envKey` sont
@@ -239,10 +258,24 @@ export interface EnvironmentInfo {
 | `rename_environment(env_id, name)` | `renameEnvironment(envId, name)` | `{ envId, name }` | `void` |
 | `archive_environment(env_id)` | `archiveEnvironment(envId)` | `{ envId }` | `void` (soft-delete `archived_at`) |
 
+**Commande — liste unifiée (NEW)**
+| Commande Rust | Wrapper api.ts | Params (`invoke`) | Réponse |
+|---|---|---|---|
+| `list_all_entries(search: Option<String>)` | `listAllEntries(search?)` | `{ search }` | `EntrySummary[]` (tous les environnements **vivants**, métadonnée claire only, tri `title COLLATE NOCASE`) |
+
+- Renvoie les entrées de **tous** les environnements non archivés dont le **projet** (s'il existe) n'est
+  pas archivé non plus — même cadre d'exclusion que `credentials_for_origin`. **Aucun déchiffrement,
+  aucune `envKey`** : métadonnée claire uniquement, comme `list_entries` (F5). Fail-closed `VaultLocked`
+  si le coffre est verrouillé. Chaque ligne porte `env_name` (nom clair de l'environnement) pour le badge
+  optionnel ; le **regroupement par domaine** est calculé **côté front**.
+- **`EntrySummary` étendu** : ajout de `env_name: Option<String>` (snake_case en JSON, comme `env_id`).
+  Les chemins par environnement (`list_entries`, `list_archived_entries`) laissent `env_name = null` ;
+  seul `list_all_entries` le remplit.
+
 **Commandes existantes — impact**
 - `default_environment()` → **conservée** (rétrocompat : renvoie le 1er env non archivé, désormais
   enrichi de `project_id`). Sert de sélection par défaut au 1er rendu. *Le `frontend` migre l'UI vers la
-  sélection projet/env mais ne supprime pas la commande dans cette phase.*
+  liste unifiée + sélection projet/env mais ne supprime pas la commande dans cette phase.*
 - `credentials_for_origin()` (dans `services/local_channel.rs`, **pas** une commande IPC) → **MODIFIÉE** :
   itère sur **tous** les environnements non archivés (`SELECT id FROM environments WHERE archived_at IS
   NULL`), charge chaque `envKey` via `vault::load_env_key`, et agrège les crédentials matchant l'origine.

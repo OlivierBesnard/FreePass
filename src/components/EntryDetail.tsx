@@ -25,7 +25,8 @@ export function EntryDetailView({
   onEdit,
 }: {
   envId: string;
-  projectId: string;
+  /** Owning project; null while the env→project lookup hasn't resolved yet. */
+  projectId: string | null;
   entryId: string;
   onClose: () => void;
   onEdit: (entry: Entry) => void;
@@ -98,13 +99,15 @@ export function EntryDetailView({
             >
               <Trash2 size={15} /> Archiver
             </button>
-            <button
-              onClick={() => setDuplicating(true)}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-ink-600 transition-colors hover:bg-cream-300"
-              title="Dupliquer vers un autre environnement"
-            >
-              <CopyPlus size={15} /> Dupliquer
-            </button>
+            {projectId && (
+              <button
+                onClick={() => setDuplicating(true)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-cream-400 px-3 text-sm font-medium text-ink-600 transition-colors hover:bg-cream-300"
+                title="Dupliquer vers un autre environnement"
+              >
+                <CopyPlus size={15} /> Dupliquer
+              </button>
+            )}
             <button
               onClick={() => onEdit(entry)}
               className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand-500 px-3 text-sm font-medium text-white transition-colors hover:bg-brand-600"
@@ -113,7 +116,7 @@ export function EntryDetailView({
             </button>
           </div>
 
-          {duplicating && (
+          {duplicating && projectId && (
             <DuplicateToEnvironment
               projectId={projectId}
               sourceEnvId={envId}

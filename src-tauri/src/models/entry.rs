@@ -23,6 +23,10 @@ pub struct EntrySummary {
     pub title: String,
     pub url: Option<String>,
     pub updated_at: String,
+    /// Owning environment's clear name. Only populated by the unified
+    /// cross-environment listing (`list_all_entries`); the per-environment list
+    /// paths leave it `None` (the caller already knows the environment).
+    pub env_name: Option<String>,
 }
 
 /// Full entry with its decrypted fields, for the opened entry.

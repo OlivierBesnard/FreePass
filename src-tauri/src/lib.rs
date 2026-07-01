@@ -12,8 +12,8 @@ use crate::commands::db::db_health_check;
 use crate::commands::generator::generate_password;
 use crate::commands::entries::{
     archive_entry, create_entry, default_environment, delete_entry, entry_icons, get_entry,
-    import_entries, list_archived_entries, list_entries, refresh_entry_icon, restore_entry,
-    update_entry,
+    import_entries, list_all_entries, list_archived_entries, list_entries, refresh_entry_icon,
+    restore_entry, update_entry,
 };
 use crate::commands::environments::{
     archive_environment, create_environment, list_environments, rename_environment,
@@ -82,6 +82,7 @@ pub fn run() {
             local_channel_info,
             default_environment,
             list_entries,
+            list_all_entries,
             get_entry,
             create_entry,
             update_entry,

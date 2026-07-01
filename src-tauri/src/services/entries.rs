@@ -81,6 +81,59 @@ pub async fn list_entries(
             title: r.get("title"),
             url: r.get("url"),
             updated_at: r.get("updated_at"),
+            // Per-environment list: the caller already knows the environment.
+            env_name: None,
+        })
+        .collect())
+}
+
+/// List clear-metadata summaries across ALL live environments (Phase 10: the
+/// unified, by-site list), optionally filtered by a local search over
+/// `title`/`url`. Like `list_entries`, this reads clear metadata only — no
+/// envKey, no decryption, no secret material (F5). An environment (or its owning
+/// project) being archived excludes its entries, mirroring the autofill scan in
+/// `local_channel::credentials_for_origin` so a "put away" environment is
+/// consistently inactive everywhere. Each row carries its owning environment's
+/// clear `name` so the front can show it as an optional badge.
+pub async fn list_all_entries(
+    pool: &SqlitePool,
+    search: Option<&str>,
+) -> AppResult<Vec<EntrySummary>> {
+    const BASE: &str = "SELECT e.id, e.env_id, e.type, e.title, e.url, e.updated_at, \
+         env.name AS env_name \
+         FROM entries e \
+         JOIN environments env ON env.id = e.env_id \
+         LEFT JOIN projects p ON p.id = env.project_id \
+         WHERE e.archived_at IS NULL AND env.archived_at IS NULL \
+         AND (env.project_id IS NULL OR p.archived_at IS NULL)";
+
+    let query = search.map(str::trim).filter(|s| !s.is_empty());
+    let rows = if let Some(q) = query {
+        let like = format!("%{q}%");
+        sqlx::query(&format!(
+            "{BASE} AND (e.title LIKE ? OR IFNULL(e.url, '') LIKE ?) \
+             ORDER BY e.title COLLATE NOCASE"
+        ))
+        .bind(&like)
+        .bind(&like)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(&format!("{BASE} ORDER BY e.title COLLATE NOCASE"))
+            .fetch_all(pool)
+            .await?
+    };
+
+    Ok(rows
+        .iter()
+        .map(|r| EntrySummary {
+            id: r.get("id"),
+            env_id: r.get("env_id"),
+            kind: r.get("type"),
+            title: r.get("title"),
+            url: r.get("url"),
+            updated_at: r.get("updated_at"),
+            env_name: Some(r.get("env_name")),
         })
         .collect())
 }
@@ -268,6 +321,8 @@ pub async fn list_archived_entries(
             title: r.get("title"),
             url: r.get("url"),
             updated_at: r.get("updated_at"),
+            // Trash is scoped to one environment: the caller knows it.
+            env_name: None,
         })
         .collect())
 }
@@ -839,6 +894,113 @@ mod tests {
         // Entry is still live and listable only in env A.
         assert_eq!(list_entries(&pool, &env_a, None).await.unwrap().len(), 1);
         assert_eq!(list_entries(&pool, &env_b, None).await.unwrap().len(), 0);
+    }
+
+    // === Phase 10: unified cross-environment list (list_all_entries) ===
+
+    #[tokio::test]
+    async fn list_all_entries_unions_live_environments_with_env_name() {
+        // Entries in TWO different environments must all appear, each tagged with
+        // its owning environment's clear name.
+        let (pool, _vk, (env_a, key_a), (env_b, key_b)) = two_envs().await;
+        create_entry(&pool, &key_a, &env_a, &login("InA", Some("a.com"), "u", "p"))
+            .await
+            .unwrap();
+        create_entry(&pool, &key_b, &env_b, &login("InB", Some("b.com"), "u", "p"))
+            .await
+            .unwrap();
+
+        let all = list_all_entries(&pool, None).await.unwrap();
+        assert_eq!(all.len(), 2, "both environments' entries must be listed");
+
+        let a = all.iter().find(|e| e.title == "InA").unwrap();
+        let b = all.iter().find(|e| e.title == "InB").unwrap();
+        // env A is the default environment ("Personnel" default env name), env B is "Prod".
+        assert_eq!(a.env_id, env_a);
+        assert_eq!(b.env_id, env_b);
+        assert_eq!(b.env_name.as_deref(), Some("Prod"), "env_name must be the env's clear name");
+        assert!(a.env_name.is_some(), "every unified row carries its env_name");
+    }
+
+    #[tokio::test]
+    async fn list_all_entries_excludes_archived_environment() {
+        // An entry living in an archived environment must NOT surface in the list.
+        let (pool, _vk, (env_a, key_a), (env_b, key_b)) = two_envs().await;
+        create_entry(&pool, &key_a, &env_a, &login("Live", Some("a.com"), "u", "p"))
+            .await
+            .unwrap();
+        create_entry(&pool, &key_b, &env_b, &login("Hidden", Some("b.com"), "u", "p"))
+            .await
+            .unwrap();
+
+        environments::archive_environment(&pool, &env_b).await.unwrap();
+
+        let all = list_all_entries(&pool, None).await.unwrap();
+        assert_eq!(all.len(), 1, "archived env's entry must be excluded");
+        assert_eq!(all[0].title, "Live");
+    }
+
+    #[tokio::test]
+    async fn list_all_entries_excludes_entries_of_an_archived_project() {
+        // Archiving the owning PROJECT removes its environments' entries from the
+        // unified list, mirroring the autofill scan (F7 consistency).
+        let (pool, _vk, (env_a, key_a), (env_b, key_b)) = two_envs().await;
+        create_entry(&pool, &key_a, &env_a, &login("X", Some("a.com"), "u", "p"))
+            .await
+            .unwrap();
+        create_entry(&pool, &key_b, &env_b, &login("Y", Some("b.com"), "u", "p"))
+            .await
+            .unwrap();
+
+        // Both envs belong to the single default project.
+        let project = projects::list_projects(&pool).await.unwrap()[0].id.clone();
+        projects::archive_project(&pool, &project).await.unwrap();
+
+        let all = list_all_entries(&pool, None).await.unwrap();
+        assert!(all.is_empty(), "archiving the owning project must hide its entries");
+    }
+
+    #[tokio::test]
+    async fn list_all_entries_filters_by_search_on_title_and_url() {
+        let (pool, _vk, (env_a, key_a), (env_b, key_b)) = two_envs().await;
+        create_entry(&pool, &key_a, &env_a, &login("GitHub", Some("github.com"), "u", "p"))
+            .await
+            .unwrap();
+        create_entry(&pool, &key_b, &env_b, &login("GitLab", Some("gitlab.com"), "u", "p"))
+            .await
+            .unwrap();
+        create_entry(&pool, &key_a, &env_a, &login("Bank", Some("bank.fr"), "u", "p"))
+            .await
+            .unwrap();
+
+        // Title match spans environments.
+        let git = list_all_entries(&pool, Some("git")).await.unwrap();
+        assert_eq!(git.len(), 2, "search must match GitHub + GitLab across envs");
+        // URL match.
+        let bank = list_all_entries(&pool, Some("bank.fr")).await.unwrap();
+        assert_eq!(bank.len(), 1, "search must match on url too");
+        // Whitespace-only search is treated as no filter.
+        let all = list_all_entries(&pool, Some("   ")).await.unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn list_all_entries_leaks_no_secret_metadata_only() {
+        // F5: the unified list must expose clear metadata only — never the
+        // decrypted username/password/notes. EntrySummary structurally cannot
+        // carry secrets; assert the row shape stays metadata + env_name.
+        let (pool, _vk, (env_a, key_a), _b) = two_envs().await;
+        create_entry(&pool, &key_a, &env_a, &login("MyBank", Some("bank.fr"), "alice", "S3cr3t"))
+            .await
+            .unwrap();
+
+        let all = list_all_entries(&pool, None).await.unwrap();
+        assert_eq!(all.len(), 1);
+        let serialized = serde_json::to_string(&all).unwrap();
+        assert!(!serialized.contains("alice"), "username must not appear in the list");
+        assert!(!serialized.contains("S3cr3t"), "password must not appear in the list");
+        assert!(serialized.contains("MyBank"), "title is clear metadata");
+        assert!(serialized.contains("env_name"), "env_name is part of the summary");
     }
 
     #[tokio::test]

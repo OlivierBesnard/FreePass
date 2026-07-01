@@ -2,24 +2,28 @@ import { useState } from "react";
 import { ArchiveRestore, KeyRound, Trash2 } from "lucide-react";
 import type { EntrySummary } from "../lib/api";
 import {
-  useArchivedEntries,
-  useDeleteEntry,
-  useRestoreEntry,
+  useAllArchivedEntries,
+  useDeleteEntryAt,
+  useRestoreEntryAt,
 } from "../hooks/useVault";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Modal } from "./Modal";
 
-/** "Trash": list archived entries, restore them, or delete permanently. */
+/**
+ * Unified "trash": archived entries aggregated across all live environments.
+ * Restore or permanently delete; each entry carries its own `env_id`, so the
+ * action targets the right environment.
+ */
 export function ArchivedEntries({
-  envId,
+  envIds,
   onClose,
 }: {
-  envId: string;
+  envIds: string[];
   onClose: () => void;
 }) {
-  const { data: archived = [], isLoading } = useArchivedEntries(envId);
-  const restore = useRestoreEntry(envId);
-  const del = useDeleteEntry(envId);
+  const { data: archived = [], isLoading } = useAllArchivedEntries(envIds);
+  const restore = useRestoreEntryAt();
+  const del = useDeleteEntryAt();
   const [toDelete, setToDelete] = useState<EntrySummary | null>(null);
 
   return (
@@ -51,7 +55,7 @@ export function ArchivedEntries({
                 )}
               </span>
               <button
-                onClick={() => restore.mutate(e.id)}
+                onClick={() => restore.mutate({ envId: e.env_id, entryId: e.id })}
                 title="Restaurer"
                 aria-label="Restaurer"
                 className="inline-flex h-8 items-center gap-1 rounded-lg border border-cream-400 px-2.5 text-xs font-medium text-ink-600 transition-colors hover:bg-cream-300"
@@ -79,7 +83,7 @@ export function ArchivedEntries({
           confirmLabel="Supprimer"
           busy={del.isPending}
           onConfirm={() => {
-            del.mutate(toDelete.id);
+            del.mutate({ envId: toDelete.env_id, entryId: toDelete.id });
             setToDelete(null);
           }}
           onClose={() => setToDelete(null)}
