@@ -23,7 +23,7 @@ const MULTI_SUFFIXES = [
 ] as const;
 
 /** Extract the host from a URL or bare host string (drops scheme, path, port). */
-export function hostOf(input: string): string {
+function hostOf(input: string): string {
   let s = input.trim();
   // drop scheme
   const schemeSplit = s.split("://");

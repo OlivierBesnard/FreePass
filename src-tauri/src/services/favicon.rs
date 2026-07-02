@@ -13,7 +13,7 @@
 //!
 //! This module does plain HTTP transport (rustls TLS); it is *not* vault crypto.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use base64::Engine;
@@ -57,48 +57,53 @@ fn is_forbidden_ip(ip: IpAddr) -> bool {
     }
 }
 
-/// Whether a host (IP literal or name) resolves only to public addresses. A name
-/// that resolves to *any* forbidden address is rejected wholesale.
-async fn host_is_public(host: &str) -> bool {
+/// Validate a candidate URL (`http`/`https` + public host) and return the host
+/// plus a concrete PUBLIC socket address to pin the connection to. Resolving ONCE
+/// here and pinning that address for the request closes the DNS-rebinding TOCTOU:
+/// a name that passes this check can't flip to a private IP at connect time (B6).
+/// A name resolving to *any* forbidden address is rejected wholesale.
+async fn resolve_public(url: &str) -> Option<(String, SocketAddr)> {
+    let u = reqwest::Url::parse(url).ok()?;
+    match u.scheme() {
+        "http" | "https" => {}
+        _ => return None,
+    }
+    let host = u.host_str()?.to_string();
+    let port = u.port_or_known_default()?;
+
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return !is_forbidden_ip(ip);
+        return if is_forbidden_ip(ip) {
+            None
+        } else {
+            Some((host, SocketAddr::new(ip, port)))
+        };
     }
-    match tokio::net::lookup_host((host, 443)).await {
-        Ok(addrs) => {
-            let mut saw_any = false;
-            for a in addrs {
-                saw_any = true;
-                if is_forbidden_ip(a.ip()) {
-                    return false;
-                }
-            }
-            saw_any
-        }
-        Err(_) => false,
+
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .ok()?
+        .collect();
+    if addrs.is_empty() || addrs.iter().any(|a| is_forbidden_ip(a.ip())) {
+        return None;
     }
+    // Every resolved address is public; pin the first one for the connection.
+    Some((host, addrs[0]))
 }
 
-/// Validate that a candidate URL is `http`/`https` with a public host.
-async fn url_is_fetchable(url: &str) -> bool {
-    match reqwest::Url::parse(url) {
-        Ok(u) => match u.scheme() {
-            "http" | "https" => match u.host_str() {
-                Some(h) => host_is_public(h).await,
-                None => false,
-            },
-            _ => false,
-        },
-        Err(_) => false,
-    }
-}
-
-fn http_client() -> AppResult<reqwest::Client> {
+/// An HTTP client that resolves `host` ONLY to the pre-validated `addr`, so DNS
+/// is not consulted again at connect time (DNS-rebinding TOCTOU fix, B6).
+fn pinned_client(host: &str, addr: SocketAddr) -> AppResult<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(TIMEOUT)
         .user_agent("FreePass")
-        // Bound redirects and block hops to non-http(s) schemes or forbidden IP
-        // literals. (Name-based hops are re-checked when we resolve each
-        // candidate host before connecting.)
+        // Pin the validated host→addr mapping (reqwest keeps the URL's port).
+        .resolve(host, addr)
+        // Bound redirects; block hops to non-http(s) schemes or forbidden IP
+        // literals. NOTE: only the ORIGINAL host is pinned — a redirect to a
+        // DIFFERENT host is resolved by normal DNS and is filtered here only when
+        // it targets an IP literal, not a name (a name-based hop is not
+        // re-validated). Acceptable for a best-effort, blind-SSRF favicon fetch on
+        // a desktop mono-user app; full re-validation would need a manual loop.
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 3 {
                 return attempt.error("too many redirects");
@@ -229,7 +234,10 @@ fn icon_links(html: &str) -> Vec<String> {
 /// return it as a `data:` URL. Any error / non-image yields None. The body is
 /// read in bounded chunks so a chunked response without a Content-Length cannot
 /// balloon memory past the cap.
-async fn try_icon(client: &reqwest::Client, url: &str) -> Option<String> {
+async fn try_icon(url: &str) -> Option<String> {
+    // Resolve + validate the host once, then pin it for the connection (B6).
+    let (host, addr) = resolve_public(url).await?;
+    let client = pinned_client(&host, addr).ok()?;
     let mut resp = client.get(url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -239,19 +247,18 @@ async fn try_icon(client: &reqwest::Client, url: &str) -> Option<String> {
             return None;
         }
     }
+    // Require a real image content-type — even for a `.ico` URL, so a non-image
+    // response served at a `.ico` path can't slip through the MIME gate (B6c).
     let ct = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let mime = if ct.starts_with("image/") {
-        ct.split(';').next().unwrap_or("image/x-icon").trim().to_string()
-    } else if url.to_ascii_lowercase().ends_with(".ico") {
-        "image/x-icon".to_string()
-    } else {
+    if !ct.starts_with("image/") {
         return None;
-    };
+    }
+    let mime = ct.split(';').next().unwrap_or("image/x-icon").trim().to_string();
 
     let mut buf: Vec<u8> = Vec::new();
     loop {
@@ -280,11 +287,12 @@ pub async fn fetch_favicon(entry_url: &str) -> AppResult<Option<String>> {
     let Some(origin) = origin_of(entry_url) else {
         return Ok(None);
     };
-    // SSRF guard: only fetch from a real public host (never loopback/private).
-    if !url_is_fetchable(&origin).await {
+    // SSRF guard: resolve + validate the origin host once, then pin it for the
+    // page fetch (never loopback/private, no DNS-rebinding window — B6).
+    let Some((host, addr)) = resolve_public(&origin).await else {
         return Ok(None);
-    }
-    let client = http_client()?;
+    };
+    let client = pinned_client(&host, addr)?;
 
     // Prefer icons the page declares, then fall back to the conventional path.
     let mut candidates: Vec<String> = Vec::new();
@@ -300,11 +308,9 @@ pub async fn fetch_favicon(entry_url: &str) -> AppResult<Option<String>> {
     candidates.push(format!("{origin}/favicon.ico"));
 
     for url in candidates.into_iter().take(5) {
-        // Re-validate each candidate: an HTML <link> can point anywhere.
-        if !url_is_fetchable(&url).await {
-            continue;
-        }
-        if let Some(data_url) = try_icon(&client, &url).await {
+        // Each candidate is re-validated + pinned inside try_icon (an HTML <link>
+        // can point anywhere).
+        if let Some(data_url) = try_icon(&url).await {
             return Ok(Some(data_url));
         }
     }

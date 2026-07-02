@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { Download, X } from "lucide-react";
+import { toast } from "sonner";
 
 /**
  * Checks GitHub Releases for a signed update on startup. If one exists, shows a
@@ -37,7 +38,11 @@ export function UpdateBanner() {
       await update.downloadAndInstall();
       await relaunch();
     } catch {
+      // Surface the failure instead of silently re-enabling the button (B12).
       setBusy(false);
+      toast.error(
+        "La mise à jour a échoué. Vérifiez votre connexion et réessayez, ou téléchargez la dernière version depuis GitHub.",
+      );
     }
   }
 

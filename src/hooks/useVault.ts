@@ -14,15 +14,6 @@ export function useEnvironment() {
   });
 }
 
-/** Entry summaries for an environment, filtered by an optional local search. */
-export function useEntries(envId: string | undefined, search: string) {
-  return useQuery({
-    queryKey: ["entries", envId, search],
-    queryFn: () => api.listEntries(envId as string, search || undefined),
-    enabled: !!envId,
-  });
-}
-
 /**
  * Unified flat list of entries across ALL live environments, optionally
  * filtered by a local search. Backs the grouped-by-site home view.
@@ -40,15 +31,6 @@ export function useEntry(envId: string | undefined, entryId: string | null) {
     queryKey: ["entry", envId, entryId],
     queryFn: () => api.getEntry(envId as string, entryId as string),
     enabled: !!envId && !!entryId,
-  });
-}
-
-/** Stored favicons for the environment, keyed by entry id (list overlay). */
-export function useEntryIcons(envId: string | undefined) {
-  return useQuery({
-    queryKey: ["entryIcons", envId],
-    queryFn: () => api.entryIcons(envId as string),
-    enabled: !!envId,
   });
 }
 
@@ -84,7 +66,6 @@ function refreshIcon(
   void api
     .refreshEntryIcon(envId, entryId, url)
     .then(() => {
-      void qc.invalidateQueries({ queryKey: ["entryIcons", envId] });
       void qc.invalidateQueries({ queryKey: ["allEntryIcons"] });
       void qc.invalidateQueries({ queryKey: ["entry", envId, entryId] });
     })
@@ -177,15 +158,6 @@ export function useImportEntries(envId: string | undefined) {
   });
 }
 
-/** Archived ("trash") entries for an environment. */
-export function useArchivedEntries(envId: string | undefined) {
-  return useQuery({
-    queryKey: ["archived", envId],
-    queryFn: () => api.listArchivedEntries(envId as string),
-    enabled: !!envId,
-  });
-}
-
 /**
  * Archived entries aggregated across several environments (the unified trash).
  * Each summary keeps its own `env_id`, so restore/delete can target the right
@@ -218,30 +190,6 @@ export function useArchiveEntry(envId: string | undefined) {
     onSuccess: () => {
       invalidateLists(qc);
       toast.success("Identifiant archivé.");
-    },
-    onError: (e) => toast.error(errorMessage(e)),
-  });
-}
-
-export function useRestoreEntry(envId: string | undefined) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (entryId: string) => api.restoreEntry(envId as string, entryId),
-    onSuccess: () => {
-      invalidateLists(qc);
-      toast.success("Identifiant restauré.");
-    },
-    onError: (e) => toast.error(errorMessage(e)),
-  });
-}
-
-export function useDeleteEntry(envId: string | undefined) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (entryId: string) => api.deleteEntry(envId as string, entryId),
-    onSuccess: () => {
-      invalidateLists(qc);
-      toast.success("Identifiant supprimé définitivement.");
     },
     onError: (e) => toast.error(errorMessage(e)),
   });

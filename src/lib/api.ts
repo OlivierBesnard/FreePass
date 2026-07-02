@@ -104,8 +104,6 @@ export const api = {
     invoke("rename_environment", { envId, name }),
   archiveEnvironment: (envId: string): Promise<void> =>
     invoke("archive_environment", { envId }),
-  listEntries: (envId: string, search?: string): Promise<EntrySummary[]> =>
-    invoke("list_entries", { envId, search: search ?? null }),
   /**
    * Unified flat list of entries across ALL live environments (non-archived
    * env + non-archived project), each carrying its `env_name`. Optional local

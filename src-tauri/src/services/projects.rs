@@ -118,32 +118,81 @@ pub async fn project_exists(pool: &SqlitePool, project_id: &str) -> AppResult<bo
     Ok(found)
 }
 
-/// Idempotent startup backfill (PLAN Phase 10, criterion #3): guarantee a default
-/// "Personnel" project exists and attach every orphan environment
-/// (`project_id IS NULL`) to it. No re-encryption: only the clear `project_id`
-/// column is written. Safe to run on every startup.
+/// Idempotent startup backfill (PLAN Phase 10, criterion #3): guarantee that
+/// every LIVE environment is rooted in a LIVE default "Personnel" project. It
+/// adopts two kinds of "unrooted" live environments:
+/// - orphans (`project_id IS NULL`, e.g. a freshly created vault), and
+/// - environments stranded under an **archived** "Personnel" project (which
+///   would make their entries ghosts — invisible in the unified list + autofill,
+///   B1). A default project that still carries live environments must not stay
+///   archived, so it is un-archived rather than duplicated (B5).
+///
+/// It does NOT touch environments under an archived *user* project (archiving
+/// such a project is a deliberate "put away"). No re-encryption: only the clear
+/// `project_id` / `archived_at` columns are written. Safe to run on every startup.
 pub async fn backfill_default_project(pool: &SqlitePool) -> AppResult<()> {
-    // Reuse an existing non-archived "Personnel" project if present, so a second
-    // startup never creates a duplicate.
+    // Any live environment that is orphan, or stranded under an archived
+    // "Personnel" project? If not, there is nothing to root — and crucially we do
+    // NOT create a default project, so archiving "Personnel" then restarting no
+    // longer resurrects a duplicate (B5).
+    let needs_root: bool = sqlx::query(
+        "SELECT 1 FROM environments e \
+         LEFT JOIN projects p ON p.id = e.project_id \
+         WHERE e.archived_at IS NULL \
+         AND (e.project_id IS NULL \
+              OR (p.archived_at IS NOT NULL AND p.name = ?)) \
+         LIMIT 1",
+    )
+    .bind(DEFAULT_PROJECT_NAME)
+    .fetch_optional(pool)
+    .await?
+    .is_some();
+    if !needs_root {
+        return Ok(());
+    }
+
+    // Resolve the default project, preferring a live "Personnel"; else reuse an
+    // archived one and un-archive it (never create a second — B5). Only mint a
+    // fresh project when none exists at all.
+    let now = Utc::now().to_rfc3339();
     let existing = sqlx::query(
-        "SELECT id FROM projects WHERE name = ? AND archived_at IS NULL \
-         ORDER BY created_at LIMIT 1",
+        "SELECT id, archived_at FROM projects WHERE name = ? \
+         ORDER BY (archived_at IS NULL) DESC, created_at LIMIT 1",
     )
     .bind(DEFAULT_PROJECT_NAME)
     .fetch_optional(pool)
     .await?;
 
     let project_id = match existing {
-        Some(row) => row.get::<String, _>("id"),
+        Some(row) => {
+            let id: String = row.get("id");
+            let archived: Option<String> = row.get("archived_at");
+            if archived.is_some() {
+                sqlx::query("UPDATE projects SET archived_at = NULL, updated_at = ? WHERE id = ?")
+                    .bind(&now)
+                    .bind(&id)
+                    .execute(pool)
+                    .await?;
+            }
+            id
+        }
         None => create_project(pool, DEFAULT_PROJECT_NAME).await?.id,
     };
 
-    // Attach orphan environments only. Environments already pointing at a project
-    // are left untouched (idempotent on re-run).
-    sqlx::query("UPDATE environments SET project_id = ? WHERE project_id IS NULL")
-        .bind(&project_id)
-        .execute(pool)
-        .await?;
+    // Root every unrooted live environment under the default project: orphans and
+    // any still pointing at an archived "Personnel" project. Environments under a
+    // live project (default or user-created) are left untouched (idempotent).
+    sqlx::query(
+        "UPDATE environments SET project_id = ? \
+         WHERE archived_at IS NULL \
+         AND (project_id IS NULL \
+              OR project_id IN (SELECT id FROM projects \
+                                WHERE archived_at IS NOT NULL AND name = ?))",
+    )
+    .bind(&project_id)
+    .bind(DEFAULT_PROJECT_NAME)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }

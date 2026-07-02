@@ -328,7 +328,28 @@ pub async fn list_archived_entries(
 }
 
 /// Restore an archived entry (un-archive). Its encrypted fields are untouched.
+///
+/// Refuses to restore into an archived environment, or an environment whose
+/// owning project is archived (D2): the entry would come back "live" yet stay
+/// invisible in the unified list + autofill (a ghost, B1). The caller must
+/// restore the environment/project first.
 pub async fn restore_entry(pool: &SqlitePool, env_id: &str, entry_id: &str) -> AppResult<()> {
+    let env_active = sqlx::query(
+        "SELECT 1 FROM environments e \
+         LEFT JOIN projects p ON p.id = e.project_id \
+         WHERE e.id = ? AND e.archived_at IS NULL \
+         AND (e.project_id IS NULL OR p.archived_at IS NULL)",
+    )
+    .bind(env_id)
+    .fetch_optional(pool)
+    .await?
+    .is_some();
+    if !env_active {
+        return Err(AppError::Conflict(
+            "restaurez d'abord l'environnement ou le projet".into(),
+        ));
+    }
+
     let now = Utc::now().to_rfc3339();
     let res = sqlx::query(
         "UPDATE entries SET archived_at = NULL, updated_at = ? \
@@ -390,14 +411,20 @@ pub async fn import_entries(
     env_id: &str,
     inputs: &[EntryInput],
 ) -> AppResult<usize> {
-    let now = Utc::now().to_rfc3339();
+    // Stamp each row with a strictly increasing timestamp (one nanosecond apart,
+    // fixed-precision so RFC3339 strings sort lexicographically) so a future
+    // recency sort can tell import order apart (D4). A single shared `now` used to
+    // make every imported row identical.
+    let base = Utc::now();
     let mut created = 0usize;
 
     let mut tx = pool.begin().await?;
-    for input in inputs {
+    for (i, input) in inputs.iter().enumerate() {
         if input.title.trim().is_empty() {
             continue;
         }
+        let now = (base + chrono::Duration::nanoseconds(i as i64))
+            .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
         let id = Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT INTO entries (id, env_id, type, title, url, created_at, updated_at) \
@@ -445,13 +472,17 @@ pub async fn set_icon(
     entry_id: &str,
     data_url: Option<&str>,
 ) -> AppResult<()> {
-    // Make sure the entry exists in this environment before writing a field.
-    let exists = sqlx::query("SELECT 1 FROM entries WHERE id = ? AND env_id = ?")
-        .bind(entry_id)
-        .bind(env_id)
-        .fetch_optional(pool)
-        .await?
-        .is_some();
+    // The entry must exist in this environment AND be live: load_icons filters
+    // archived entries, so an icon written to an archived entry would be a dead
+    // write that is never read back (D3). Refuse it.
+    let exists = sqlx::query(
+        "SELECT 1 FROM entries WHERE id = ? AND env_id = ? AND archived_at IS NULL",
+    )
+    .bind(entry_id)
+    .bind(env_id)
+    .fetch_optional(pool)
+    .await?
+    .is_some();
     if !exists {
         return Err(AppError::NotFound);
     }

@@ -191,10 +191,18 @@ pub async fn change_master_password(
     Ok(())
 }
 
-/// The id of the (single, in v1) default environment.
+/// The id of the default environment: the oldest environment that is itself
+/// live AND rooted in a live project (or still orphan, pre-backfill). An
+/// environment whose owning PROJECT is archived is NOT eligible — otherwise the
+/// "Add" flow would target it and every new entry would be a ghost, invisible in
+/// the unified list and in autofill (B1). This mirrors the archived-project
+/// predicate used by `list_all_entries` and the autofill scan.
 pub async fn default_environment_id(pool: &SqlitePool) -> AppResult<String> {
     let row = sqlx::query(
-        "SELECT id FROM environments WHERE archived_at IS NULL ORDER BY created_at LIMIT 1",
+        "SELECT e.id FROM environments e \
+         LEFT JOIN projects p ON p.id = e.project_id \
+         WHERE e.archived_at IS NULL AND (e.project_id IS NULL OR p.archived_at IS NULL) \
+         ORDER BY e.created_at LIMIT 1",
     )
     .fetch_optional(pool)
     .await?

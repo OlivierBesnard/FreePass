@@ -37,10 +37,18 @@ import { Button, inputClass } from "../components/ui";
 import { EntryForm } from "../components/EntryForm";
 import { EntryDetailView } from "../components/EntryDetail";
 import { CommandPalette } from "../components/CommandPalette";
+import { isModalOpen } from "../components/Modal";
 import { ImportCsv } from "../components/ImportCsv";
 import { ExtensionPairing } from "../components/ExtensionPairing";
 import { ArchivedEntries } from "../components/ArchivedEntries";
 import { ProjectsManager } from "../components/ProjectsManager";
+
+/** Platform-correct label for the quick-search shortcut (⌘ on macOS, Ctrl
+ *  elsewhere) so Windows/Linux users don't see the Mac Command glyph (#11). */
+const IS_MAC =
+  typeof navigator !== "undefined" &&
+  /mac/i.test(navigator.platform || navigator.userAgent || "");
+const SHORTCUT_LABEL = IS_MAC ? "⌘K" : "Ctrl K";
 
 /** A registrable-domain bucket of entries for the grouped (no-search) view. */
 interface DomainGroup {
@@ -75,6 +83,11 @@ function groupByDomain(entries: EntrySummary[]): DomainGroup[] {
 export function VaultHome({ onLock }: { onLock: () => void }) {
   const [search, setSearch] = useState("");
   const { data: entries = [], isLoading } = useAllEntries(search);
+  // The full, unfiltered list — backs the command palette (⌘K searches ALL
+  // entries, not the header-filtered subset, B7) and the env-badge decision (B14).
+  // Same query key as `entries` when the header search is empty, so no extra
+  // fetch in the common case.
+  const { data: allEntries = [] } = useAllEntries("");
   const envIds = useMemo(
     () => [...new Set(entries.map((e) => e.env_id))],
     [entries],
@@ -93,9 +106,11 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
 
   // Show env badges only when entries actually span more than one environment;
   // a single "Personnel" environment stays badge-free for a clean personal use.
+  // Computed on the FULL list so badges don't flicker when a search narrows the
+  // visible entries down to a single environment (B14).
   const distinctEnvCount = useMemo(
-    () => new Set(entries.map((e) => e.env_id)).size,
-    [entries],
+    () => new Set(allEntries.map((e) => e.env_id)).size,
+    [allEntries],
   );
   const showEnvBadge = distinctEnvCount > 1;
 
@@ -114,6 +129,9 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        // Don't toggle the palette behind an already-open dialog (B3); Escape
+        // closes the topmost modal instead.
+        if (isModalOpen()) return;
         e.preventDefault();
         setPaletteOpen((v) => !v);
       }
@@ -171,7 +189,7 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
               className={`${inputClass} h-9 pl-9 pr-12`}
             />
             <span className="kbd pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
-              ⌘K
+              {SHORTCUT_LABEL}
             </span>
           </div>
 
@@ -304,11 +322,11 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
       )}
       {paletteOpen && (
         <CommandPalette
-          entries={entries}
+          entries={allEntries}
           onClose={() => setPaletteOpen(false)}
           onSelect={(id) => {
             setPaletteOpen(false);
-            const entry = entries.find((e) => e.id === id) ?? null;
+            const entry = allEntries.find((e) => e.id === id) ?? null;
             setSelected(entry);
           }}
         />
@@ -332,6 +350,9 @@ export function VaultHome({ onLock }: { onLock: () => void }) {
 
 const onActivate =
   (fn: () => void) => (e: React.KeyboardEvent) => {
+    // Only act on keys targeting the row itself — a keydown bubbling up from a
+    // focused quick-action button must fire that button, not open the row (B4).
+    if (e.target !== e.currentTarget) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       fn();
@@ -500,7 +521,7 @@ function QuickActions({ entry }: { entry: EntrySummary }) {
       onClick={(e) => e.stopPropagation()}
     >
       <span
-        className="mr-0.5 hidden w-16 truncate text-right font-mono text-[11px] tracking-widest text-ink-400 sm:inline"
+        className="mr-0.5 hidden w-16 truncate text-right font-mono text-[11px] tracking-widest text-ink-400 min-[520px]:inline"
         title={revealed ?? undefined}
       >
         {revealed !== null ? revealed : "••••••••"}

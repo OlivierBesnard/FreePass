@@ -38,42 +38,75 @@ async function getActiveTab() {
   return tab;
 }
 
-// Find the port the app is listening on (it's one of CANDIDATE_PORTS). /health
-// requires the pairing token (so a local process can't probe the lock state).
+// fetch with a hard timeout so a third party squatting a candidate port without
+// answering can't freeze the popup on "Chargement…" (B10).
+async function fetchWithTimeout(url, opts = {}, timeoutMs = 1500) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Find the port the app is listening on (one of CANDIDATE_PORTS). A port only
+// counts as FreePass if /health returns our JSON `{"status":"ok",…}` — a generic
+// 401 from an unrelated service must NOT be mistaken for a bad token (B10).
+// Returns { status: "ok" | "auth" | "none", port }.
 async function discoverPort(token) {
+  let authPort = null; // a port that answered 401 to a valid-looking request
   for (const port of CANDIDATE_PORTS) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      const res = await fetchWithTimeout(`http://127.0.0.1:${port}/health`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
       });
-      // 200 = found; 401 = it IS FreePass but the token is wrong — still the
-      // right port, so the /credentials call can surface the auth error.
-      if (res.ok || res.status === 401) return port;
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data && data.status === "ok") return { status: "ok", port };
+      } else if (res.status === 401 && authPort === null) {
+        authPort = port;
+      }
     } catch {
-      // try next
+      // timeout / connection refused → try the next port
     }
   }
-  return null;
+  if (authPort !== null) return { status: "auth", port: authPort };
+  return { status: "none", port: null };
 }
 
 async function fetchCredentials(token, origin) {
-  const port = await discoverPort(token);
-  if (port === null) throw "no-app";
-  const res = await fetch(`http://127.0.0.1:${port}/credentials`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+  const found = await discoverPort(token);
+  if (found.status === "none") throw "no-app";
+  if (found.status === "auth") throw 401; // right app, wrong/expired token
+  const res = await fetchWithTimeout(
+    `http://127.0.0.1:${found.port}/credentials`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ origin }),
     },
-    body: JSON.stringify({ origin }),
-  });
+    3000,
+  );
   if (!res.ok) throw res.status;
   return res.json();
 }
 
-// Runs in the page (injected). Self-contained: no outer references.
+// Runs in the page (injected). Self-contained: no outer references. Returns true
+// iff at least one field was actually filled, so the popup can report failure
+// instead of closing silently (B11).
 function fillForm(username, password) {
+  function isVisible(elm) {
+    if (!elm) return false;
+    const rect = elm.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    const style = window.getComputedStyle(elm);
+    return style.visibility !== "hidden" && style.display !== "none";
+  }
   function setValue(elm, value) {
     const proto =
       elm.tagName === "TEXTAREA"
@@ -84,31 +117,62 @@ function fillForm(username, password) {
     elm.dispatchEvent(new Event("input", { bubbles: true }));
     elm.dispatchEvent(new Event("change", { bubbles: true }));
   }
-  const pw = document.querySelector('input[type="password"]');
-  if (pw && password) setValue(pw, password);
-  if (username) {
-    let user = document.querySelector(
-      'input[autocomplete="username"], input[type="email"], input[name*="user" i], input[name*="email" i], input[id*="user" i]',
-    );
-    if (!user) {
-      const texts = Array.from(
-        document.querySelectorAll('input[type="text"], input:not([type])'),
-      );
-      user = texts[0] || null;
-    }
-    if (user) setValue(user, username);
+
+  let filled = false;
+
+  // Prefer a VISIBLE login password field over a hidden or "create new password"
+  // field (sign-up forms), rather than blindly taking the first one (B11).
+  const pwFields = Array.from(document.querySelectorAll('input[type="password"]'));
+  const pw =
+    pwFields.find((e) => isVisible(e) && e.autocomplete !== "new-password") ||
+    pwFields.find((e) => isVisible(e)) ||
+    pwFields[0] ||
+    null;
+  if (pw && password) {
+    setValue(pw, password);
+    filled = true;
   }
-  return true;
+
+  if (username) {
+    let user =
+      document.querySelector('input[autocomplete="username"]') ||
+      document.querySelector('input[type="email"]');
+    // Otherwise a visible text/email field within the same form as the password.
+    if (!user && pw) {
+      const scope = pw.form || document;
+      user =
+        Array.from(
+          scope.querySelectorAll(
+            'input[type="text"], input[type="email"], input:not([type])',
+          ),
+        ).find(isVisible) || null;
+    }
+    if (!user) {
+      user = document.querySelector(
+        'input[name*="user" i], input[name*="email" i], input[id*="user" i]',
+      );
+    }
+    if (user) {
+      setValue(user, username);
+      filled = true;
+    }
+  }
+  return filled;
 }
 
 async function fill(cred) {
   const tab = await getActiveTab();
   if (!tab || tab.id == null) return;
-  await chrome.scripting.executeScript({
+  const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     func: fillForm,
     args: [cred.username || "", cred.password || ""],
   });
+  const ok = results && results[0] && results[0].result === true;
+  if (!ok) {
+    message("Aucun champ de connexion trouvé sur cette page.");
+    return;
+  }
   window.close();
 }
 

@@ -203,25 +203,44 @@ fn classify_origin(origin: Option<&str>) -> Result<Option<&str>, ()> {
 }
 
 fn bearer_ok(auth: Option<&str>, token: &str) -> bool {
+    // Constant-time comparison so a local process can't time-probe the token
+    // byte by byte (dette; loopback + 256-bit token make this defence-in-depth).
+    // Length is compared first (the token length is fixed, so it leaks nothing).
+    use subtle::ConstantTimeEq;
+    let expected = format!("Bearer {token}");
     match auth {
-        Some(a) => a == format!("Bearer {token}"),
-        None => false,
+        Some(a) if a.len() == expected.len() => a.as_bytes().ct_eq(expected.as_bytes()).into(),
+        _ => false,
     }
 }
 
 /// Extract the host from a URL or bare host string (drops scheme, path, port).
+/// An IPv6 literal in brackets (`[::1]`, `[::1]:8443`) is unwrapped to the inner
+/// address so it survives the port-stripping split below.
 fn host_of(input: &str) -> String {
     let s = input.trim();
     let s = s.split("://").last().unwrap_or(s); // drop scheme
     let s = s.split('/').next().unwrap_or(s); // drop path
     let s = s.split('?').next().unwrap_or(s);
-    let s = s.split(':').next().unwrap_or(s); // drop port
+    // Bracketed IPv6 literal: keep only what is inside the brackets.
+    if let Some(rest) = s.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            return rest[..end].trim().to_ascii_lowercase();
+        }
+    }
+    let s = s.split(':').next().unwrap_or(s); // drop port (IPv4 / hostname)
     s.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
 /// Registrable domain of a host (strips `www.`, honours a small multi-label
 /// suffix list). Used to compare a page origin to a stored entry URL.
 fn registrable_domain(host: &str) -> String {
+    // An IP literal (v4 or v6) is its own registrable unit — never truncate it to
+    // its last labels, or unrelated hosts like `10.0.3.4` and `192.168.3.4` would
+    // both collapse to "3.4" and cross-match (F6). An IP host matches only itself.
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return host.to_string();
+    }
     let host = host.strip_prefix("www.").unwrap_or(host);
     let labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
     if labels.len() < 2 {
@@ -443,12 +462,31 @@ mod tests {
     }
 
     #[test]
+    fn ip_literals_are_their_own_registrable_domain() {
+        // B2: an IP host must match only itself — never collapse to its last two
+        // labels/octets (which would cross-match unrelated hosts, F6).
+        assert_eq!(registrable_domain(&host_of("http://10.0.3.4")), "10.0.3.4");
+        assert_eq!(registrable_domain(&host_of("http://192.168.3.4")), "192.168.3.4");
+        assert_ne!(
+            registrable_domain(&host_of("http://10.0.3.4")),
+            registrable_domain(&host_of("http://192.168.3.4")),
+            "two different IPv4 hosts sharing their last two octets must not collapse together"
+        );
+        // IPv6 literal (bracketed, with and without a port) unwraps to the address.
+        assert_eq!(registrable_domain(&host_of("http://[2001:db8::1]:8443")), "2001:db8::1");
+        assert_eq!(registrable_domain(&host_of("http://[::1]")), "::1");
+    }
+
+    #[test]
     fn domains_match_is_strict() {
         assert!(domains_match("https://accounts.google.com", "google.com"));
         assert!(domains_match("github.com", "https://github.com/login"));
         assert!(!domains_match("https://paypa1.com", "paypal.com")); // typosquat
         assert!(!domains_match("https://evil.com", "github.com"));
         assert!(!domains_match("foo.co.uk", "bar.co.uk")); // same suffix, different domain
+        // B2: IP literals match only themselves, never a look-alike sharing octets.
+        assert!(domains_match("http://10.0.3.4/login", "10.0.3.4"));
+        assert!(!domains_match("http://192.168.3.4", "http://10.0.3.4"));
     }
 
     #[tokio::test]

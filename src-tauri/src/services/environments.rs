@@ -94,7 +94,46 @@ pub async fn rename_environment(pool: &SqlitePool, env_id: &str, name: &str) -> 
 /// Soft-delete (archive) an environment. Its envKey and entries stay on disk
 /// (reversible at the data layer); the archived environment is excluded from
 /// lists and from the autofill scan (F7 stays intact — archived = not served).
+///
+/// Refuses to archive the LAST live environment of its project (D1): doing so
+/// would leave the project (or, for the orphan default env, the whole vault)
+/// with no environment, so `default_environment_id` would fail and the coffre
+/// would be unusable. The front already hides this; enforce it here so a direct
+/// IPC call cannot reach the broken state. To remove a project's only
+/// environment, archive the project instead.
 pub async fn archive_environment(pool: &SqlitePool, env_id: &str) -> AppResult<()> {
+    let project_id: Option<String> = sqlx::query(
+        "SELECT project_id FROM environments WHERE id = ? AND archived_at IS NULL",
+    )
+    .bind(env_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::EnvironmentNotFound)?
+    .get("project_id");
+
+    let live_siblings: i64 = match &project_id {
+        Some(pid) => sqlx::query(
+            "SELECT COUNT(*) AS n FROM environments \
+             WHERE project_id = ? AND archived_at IS NULL",
+        )
+        .bind(pid)
+        .fetch_one(pool)
+        .await?
+        .get("n"),
+        None => sqlx::query(
+            "SELECT COUNT(*) AS n FROM environments \
+             WHERE project_id IS NULL AND archived_at IS NULL",
+        )
+        .fetch_one(pool)
+        .await?
+        .get("n"),
+    };
+    if live_siblings <= 1 {
+        return Err(AppError::Conflict(
+            "impossible d'archiver le dernier environnement du projet".into(),
+        ));
+    }
+
     let now = Utc::now().to_rfc3339();
     let res = sqlx::query(
         "UPDATE environments SET archived_at = ?, updated_at = ? \
@@ -182,28 +221,51 @@ mod tests {
     async fn list_rename_archive_environments() {
         let (pool, vk, project_id) = setup().await;
         let env = create_environment(&pool, &vk, &project_id, "Dev").await.unwrap();
+        // A keeper so `env` is not the project's LAST environment (D1 guard).
+        let keeper = create_environment(&pool, &vk, &project_id, "Prod").await.unwrap();
 
         let listed = list_environments(&pool, &project_id).await.unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, env.id);
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().any(|e| e.id == env.id));
 
         rename_environment(&pool, &env.id, "Développement").await.unwrap();
         assert_eq!(
-            list_environments(&pool, &project_id).await.unwrap()[0].name,
+            list_environments(&pool, &project_id)
+                .await
+                .unwrap()
+                .iter()
+                .find(|e| e.id == env.id)
+                .unwrap()
+                .name,
             "Développement"
         );
 
         archive_environment(&pool, &env.id).await.unwrap();
+        let after = list_environments(&pool, &project_id).await.unwrap();
         assert!(
-            list_environments(&pool, &project_id).await.unwrap().is_empty(),
-            "archived environments are hidden"
+            after.iter().all(|e| e.id != env.id),
+            "archived environment is hidden"
         );
-        // Envkey still unwraps after archive only if not filtered; load_env_key
-        // filters archived, so it must now be gone from that path.
+        assert!(after.iter().any(|e| e.id == keeper.id), "the keeper remains");
+        // load_env_key filters archived, so the archived env is gone from that path.
         assert!(matches!(
             vault::load_env_key(&pool, &vk, &env.id).await,
             Err(AppError::EnvironmentNotFound)
         ));
+    }
+
+    #[tokio::test]
+    async fn cannot_archive_the_last_environment_of_a_project() {
+        // D1: archiving the only live environment of a project is refused with a
+        // clean Conflict, so the project never ends up with zero environments.
+        let (pool, vk, project_id) = setup().await;
+        let only = create_environment(&pool, &vk, &project_id, "Solo").await.unwrap();
+        assert!(matches!(
+            archive_environment(&pool, &only.id).await,
+            Err(AppError::Conflict(_))
+        ));
+        // It is still live and listed.
+        assert_eq!(list_environments(&pool, &project_id).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -254,11 +316,17 @@ mod tests {
         // AND make its envKey unreachable via load_env_key (the autofill path).
         let (pool, vk, project_id) = setup().await;
         let env = create_environment(&pool, &vk, &project_id, "Prod").await.unwrap();
+        // A keeper so `env` is not the LAST environment (D1 guard would refuse).
+        create_environment(&pool, &vk, &project_id, "Keep").await.unwrap();
         // Its key loads while live.
         vault::load_env_key(&pool, &vk, &env.id).await.unwrap();
 
         archive_environment(&pool, &env.id).await.unwrap();
-        assert!(list_environments(&pool, &project_id).await.unwrap().is_empty());
+        assert!(list_environments(&pool, &project_id)
+            .await
+            .unwrap()
+            .iter()
+            .all(|e| e.id != env.id));
         assert!(matches!(
             vault::load_env_key(&pool, &vk, &env.id).await,
             Err(AppError::EnvironmentNotFound)

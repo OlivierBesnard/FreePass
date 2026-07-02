@@ -57,6 +57,10 @@ function invalidateProjectTree(
   void qc.invalidateQueries({ queryKey: ["projects"] });
   void qc.invalidateQueries({ queryKey: ["all-environments"] });
   void qc.invalidateQueries({ queryKey: ["all-entries"] });
+  // The default environment ("Add"/"Import" target) can change when a project or
+  // environment is archived — refresh it so those actions never target an
+  // archived env (B9, complements the B1 backend fix).
+  void qc.invalidateQueries({ queryKey: ["environment"] });
   if (projectId) {
     void qc.invalidateQueries({ queryKey: ["environments", projectId] });
   } else {
